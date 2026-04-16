@@ -16,16 +16,13 @@ const server = http.createServer(app);
 // Socket.io setup
 const io = new Server(server, {
     cors: {
-        origin: ["http://localhost:5173", "https://koretalk008.onrender.com"],
+        origin: "https://koretalk007.onrender.com",
         methods: ["GET", "POST"]
     }
 });
 
 // Middleware
-app.use(cors({
-    origin: ["http://localhost:5173", "https://koretalk008.onrender.com"],
-    credentials: true
-}));
+app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -38,21 +35,6 @@ mongoose.connect(MongoDBUri)
 app.use('/api/users', userRoutes);
 app.use('/api/chats', chatRoutes);
 app.use('/api/messages', messageRoutes);
-
-// Root route for health check
-app.get('/', (req, res) => {
-    res.json({
-        message: 'Chat App Backend API',
-        status: 'running',
-        version: '1.0.0',
-        endpoints: {
-            users: '/api/users',
-            chats: '/api/chats',
-            messages: '/api/messages',
-            upload: '/api/upload'
-        }
-    });
-});
 
 // ImgBB Upload endpoint
 app.post('/api/upload', async (req, res) => {
