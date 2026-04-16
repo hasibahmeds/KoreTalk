@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
+import config from '../config';
 
 const SocketContext = createContext();
 
@@ -12,8 +13,8 @@ export const SocketProvider = ({ children }) => {
     const { currentUser, dbUser } = useAuth();
 
     useEffect(() => {
-        // Initialize socket connection
-        socketRef.current = io('https://koretalk007.onrender.com');
+        // Initialize socket connection using config
+        socketRef.current = io(config.SOCKET_URL);
 
         socketRef.current.on('connect', () => {
             console.log('Connected to socket server');
