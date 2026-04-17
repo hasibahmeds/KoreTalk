@@ -3193,7 +3193,7 @@ textarea:focus {
 }
 
 .messenger-audio-player.sent .audio-duration {
-    color: rgba(255, 255, 255, 0.925);
+    color: white;
 }
 
 .messenger-audio-player.received .audio-duration {
