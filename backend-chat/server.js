@@ -1,0 +1,131 @@
+require('dotenv').config();
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const cors = require('cors');
+const mongoose = require('mongoose');
+const { MongoDBUri, ImgBBApiKey } = require('./config');
+const userRoutes = require('./routes/users');
+const chatRoutes = require('./routes/chats');
+const messageRoutes = require('./routes/messages');
+const User = require('./models/User');
+
+const app = express();
+const server = http.createServer(app);
+
+// Socket.io setup
+const io = new Server(server, {
+    cors: {
+        origin: "http://localhost:5173",
+        methods: ["GET", "POST"]
+    }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// MongoDB Connection
+mongoose.connect(MongoDBUri)
+    .then(() => console.log('MongoDB connected successfully'))
+    .catch(err => console.error('MongoDB connection error:', err));
+
+// Routes
+app.use('/api/users', userRoutes);
+app.use('/api/chats', chatRoutes);
+app.use('/api/messages', messageRoutes);
+
+// ImgBB Upload endpoint
+app.post('/api/upload', async (req, res) => {
+    try {
+        const { image } = req.body;
+
+        if (!image) {
+            return res.status(400).json({ error: 'No image provided' });
+        }
+
+        const formData = new FormData();
+        formData.append('image', image);
+        formData.append('key', ImgBBApiKey);
+
+        const response = await fetch('https://api.imgbb.com/1/upload', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            res.json({ url: data.data.url });
+        } else {
+            res.status(500).json({ error: 'Upload failed' });
+        }
+    } catch (error) {
+        console.error('Upload error:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
+
+    socket.on('join_chat', (userId) => {
+        socket.join(userId);
+        console.log(`User ${userId} joined their room`);
+    });
+
+    socket.on('send_message', async (data) => {
+        const { receiverId, message, senderId } = data;
+
+        // Check if receiver has blocked the sender
+        const receiver = await User.findOne({ uid: receiverId });
+        if (receiver) {
+            const isBlocked = receiver.blockedUsers.some(
+                blockedId => blockedId.toString() === senderId
+            );
+
+            if (isBlocked) {
+                console.log(`Message blocked: ${senderId} is blocked by ${receiverId}`);
+                return; // Don't deliver the message
+            }
+        }
+
+        io.to(receiverId).emit('receive_message', message);
+    });
+
+    socket.on('message_edited', (data) => {
+        const { receiverId, message } = data;
+        io.to(receiverId).emit('message_edited', message);
+    });
+
+    socket.on('message_deleted', (data) => {
+        const { receiverId, messageId } = data;
+        io.to(receiverId).emit('message_deleted', { messageId });
+    });
+
+    socket.on('friend_request', (data) => {
+        const { receiverId, request } = data;
+        io.to(receiverId).emit('friend_request', request);
+    });
+
+    socket.on('friend_request_accepted', (data) => {
+        const { receiverId, user } = data;
+        io.to(receiverId).emit('friend_request_accepted', user);
+    });
+
+    socket.on('typing', (data) => {
+        const { receiverId, isTyping } = data;
+        io.to(receiverId).emit('typing', { isTyping });
+    });
+
+    socket.on('disconnect', () => {
+        console.log('User disconnected:', socket.id);
+    });
+});
+
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
