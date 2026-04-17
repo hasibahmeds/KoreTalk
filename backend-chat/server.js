@@ -16,7 +16,7 @@ const server = http.createServer(app);
 // Socket.io setup
 const io = new Server(server, {
     cors: {
-        origin: "http://localhost:5173",
+        origin: "https://koretalk008.onrender.com",
         methods: ["GET", "POST"]
     }
 });
