@@ -136,8 +136,10 @@ const Dashboard = () => {
     const remoteStreamRef = useRef(null);
     const localVideoRef = useRef(null);
     const remoteVideoRef = useRef(null);
+    const remoteAudioRef = useRef(null);   // always-mounted audio element for remote audio
     const callDurationRef = useRef(null);
     const pendingCandidatesRef = useRef([]);
+    const callStateRef = useRef('idle');   // mirrors callState for use inside socket closures
 
     const [isTyping, setIsTyping] = useState(false);
     const [showFriendRequests, setShowFriendRequests] = useState(false);
@@ -185,11 +187,16 @@ const Dashboard = () => {
         };
     }, []);
 
+    // Keep callStateRef in sync so socket handlers can read current state
+    // without needing callState in their dependency arrays
+    useEffect(() => { callStateRef.current = callState; }, [callState]);
+
     // ─── WebRTC helpers ───
     const ICE_SERVERS = {
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
         ]
     };
 
@@ -199,6 +206,10 @@ const Dashboard = () => {
         if (localStreamRef.current) {
             localStreamRef.current.getTracks().forEach(t => t.stop());
             localStreamRef.current = null;
+        }
+        // Stop remote audio element
+        if (remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = null;
         }
         remoteStreamRef.current = null;
         pendingCandidatesRef.current = [];
@@ -234,17 +245,34 @@ const Dashboard = () => {
             }
         };
 
+        // ontrack fires when remote media arrives — write to BOTH video and audio
         peer.ontrack = (e) => {
-            remoteStreamRef.current = e.streams[0];
+            const remoteStream = e.streams[0];
+            remoteStreamRef.current = remoteStream;
+            // For video calls: attach to video element (rendered when active)
             if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = e.streams[0];
+                remoteVideoRef.current.srcObject = remoteStream;
+            }
+            // For audio calls (and audio track of video calls): attach to always-mounted audio element
+            if (remoteAudioRef.current) {
+                remoteAudioRef.current.srcObject = remoteStream;
+                remoteAudioRef.current.play().catch(err => console.warn('Remote audio play failed:', err));
             }
         };
 
         peer.onconnectionstatechange = () => {
+            console.log('Peer connection state:', peer.connectionState);
             if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
                 cleanupCall();
             }
+        };
+
+        peer.onicegatheringstatechange = () => {
+            console.log('ICE gathering state:', peer.iceGatheringState);
+        };
+
+        peer.onsignalingstatechange = () => {
+            console.log('Signaling state:', peer.signalingState);
         };
 
         return peer;
@@ -475,14 +503,15 @@ const Dashboard = () => {
     }, [selectedChat, currentUser, onReceiveMessage, onMessageDeleted, onMessageEdited, onFriendRequest, fetchDbUser, socket]);
 
     // ─── Call socket listeners ───
+    // IMPORTANT: callState is intentionally NOT in deps to avoid tearing down
+    // listeners mid-call. We use callStateRef to read current state safely.
     useEffect(() => {
         if (!socket) return;
 
         const handleIncomingCall = (data) => {
-            // Only show if not already in a call
-            if (callState === 'idle') {
+            // Use ref to get current call state without adding it to deps
+            if (callStateRef.current === 'idle') {
                 setIncomingCallData(data);
-                // find partner from users list
                 setCallPartner({ uid: data.callerId, displayName: data.callerName, photoURL: data.callerPhoto });
                 setCallState('incoming');
             }
@@ -492,11 +521,20 @@ const Dashboard = () => {
             try {
                 if (peerRef.current && peerRef.current.signalingState !== 'stable') {
                     await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-                    // Flush pending candidates
+                    // Flush any ICE candidates that arrived before the answer
                     for (const c of pendingCandidatesRef.current) {
-                        await peerRef.current.addIceCandidate(new RTCIceCandidate(c));
+                        try {
+                            await peerRef.current.addIceCandidate(new RTCIceCandidate(c));
+                        } catch (e) {
+                            console.warn('Pending ICE error:', e);
+                        }
                     }
                     pendingCandidatesRef.current = [];
+                    // Attach remote stream to audio element if it already arrived
+                    if (remoteStreamRef.current && remoteAudioRef.current) {
+                        remoteAudioRef.current.srcObject = remoteStreamRef.current;
+                        remoteAudioRef.current.play().catch(err => console.warn('Audio play failed:', err));
+                    }
                     setCallState('active');
                     startCallTimer();
                 }
@@ -514,24 +552,27 @@ const Dashboard = () => {
         };
 
         const handleIceCandidate = async ({ candidate }) => {
-            if (peerRef.current && candidate) {
-                try {
-                    if (peerRef.current.remoteDescription) {
-                        await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
-                    } else {
-                        pendingCandidatesRef.current.push(candidate);
-                    }
-                } catch (err) {
-                    console.error('ICE candidate error:', err);
+            if (!peerRef.current || !candidate) return;
+            try {
+                if (peerRef.current.remoteDescription && peerRef.current.remoteDescription.type) {
+                    await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+                } else {
+                    // Queue until remote description is set
+                    pendingCandidatesRef.current.push(candidate);
+                }
+            } catch (err) {
+                // Ignore benign errors (empty candidates at end of gathering)
+                if (!err.message.includes('null') && !err.message.includes('empty')) {
+                    console.warn('ICE candidate error:', err);
                 }
             }
         };
 
-        onIncomingCall(handleIncomingCall);
-        onCallAnswered(handleCallAnswered);
-        onCallRejected(handleCallRejected);
-        onCallEnded(handleCallEnded);
-        onIceCandidate(handleIceCandidate);
+        socket.on('incoming_call', handleIncomingCall);
+        socket.on('call_answered', handleCallAnswered);
+        socket.on('call_rejected', handleCallRejected);
+        socket.on('call_ended', handleCallEnded);
+        socket.on('ice_candidate', handleIceCandidate);
 
         return () => {
             socket.off('incoming_call', handleIncomingCall);
@@ -540,16 +581,23 @@ const Dashboard = () => {
             socket.off('call_ended', handleCallEnded);
             socket.off('ice_candidate', handleIceCandidate);
         };
-    }, [socket, callState, cleanupCall, onIncomingCall, onCallAnswered, onCallRejected, onCallEnded, onIceCandidate]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [socket, cleanupCall]); // callState intentionally omitted — use callStateRef instead
 
-    // Sync remote video when active
+    // Sync remote video when call becomes active
     useEffect(() => {
-        if (callState === 'active' && remoteVideoRef.current && remoteStreamRef.current) {
-            remoteVideoRef.current.srcObject = remoteStreamRef.current;
+        if (callState === 'active' && remoteStreamRef.current) {
+            if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = remoteStreamRef.current;
+            }
+            if (remoteAudioRef.current) {
+                remoteAudioRef.current.srcObject = remoteStreamRef.current;
+                remoteAudioRef.current.play().catch(err => console.warn('Audio sync play failed:', err));
+            }
         }
     }, [callState]);
 
-    // Sync local video when stream is ready
+    // Sync local video when stream is ready (video only)
     useEffect(() => {
         if (localStreamRef.current && localVideoRef.current) {
             localVideoRef.current.srcObject = localStreamRef.current;
@@ -1235,6 +1283,15 @@ const Dashboard = () => {
 
     return (
         <div className="dashboard">
+            {/* Hidden audio element — always mounted so remote audio stream
+                can be attached even during audio-only calls (no video element visible) */}
+            <audio
+                ref={remoteAudioRef}
+                autoPlay
+                playsInline
+                style={{ display: 'none' }}
+            />
+
             {/* Mobile Sidebar Toggle Button */}
             <button
                 className="sidebar-toggle"
