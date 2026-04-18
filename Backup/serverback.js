@@ -16,7 +16,7 @@ const server = http.createServer(app);
 // Socket.io setup
 const io = new Server(server, {
     cors: {
-        origin: "https://koretalk008.onrender.com",
+        origin: "http://localhost:5173",
         methods: ["GET", "POST"]
     }
 });
@@ -118,65 +118,6 @@ io.on('connection', (socket) => {
     socket.on('typing', (data) => {
         const { receiverId, isTyping } = data;
         io.to(receiverId).emit('typing', { isTyping });
-    });
-
-    // Video call events
-    socket.on('video_call_request', (data) => {
-        const { callerId, callerName, receiverId, chatId } = data;
-        io.to(receiverId).emit('incoming_video_call', {
-            callerId,
-            callerName,
-            receiverId,
-            chatId
-        });
-    });
-
-    socket.on('video_call_accepted', (data) => {
-        const { callerId, receiverId } = data;
-        const startTime = Date.now(); // Synchronized timestamp for both users
-
-        // Send to caller with timestamp
-        io.to(callerId).emit('video_call_accepted', {
-            receiverId,
-            startTime
-        });
-
-        // Also send to receiver with same timestamp
-        io.to(receiverId).emit('video_call_accepted', {
-            callerId,
-            startTime
-        });
-    });
-
-    socket.on('video_call_rejected', (data) => {
-        const { callerId, receiverId } = data;
-        io.to(callerId).emit('video_call_rejected', { receiverId });
-    });
-
-    socket.on('video_call_ended', (data) => {
-        const { callerId, receiverId } = data;
-        io.to(receiverId).emit('video_call_ended', { callerId });
-    });
-
-    socket.on('video_call_cancelled', (data) => {
-        const { callerId, receiverId } = data;
-        io.to(receiverId).emit('video_call_cancelled', { callerId });
-    });
-
-    // WebRTC signaling
-    socket.on('offer', (data) => {
-        const { receiverId, offer } = data;
-        io.to(receiverId).emit('offer', { callerId: socket.id, offer });
-    });
-
-    socket.on('answer', (data) => {
-        const { callerId, answer } = data;
-        io.to(callerId).emit('answer', { answer });
-    });
-
-    socket.on('ice_candidate', (data) => {
-        const { receiverId, candidate } = data;
-        io.to(receiverId).emit('ice_candidate', { candidate });
     });
 
     socket.on('disconnect', () => {

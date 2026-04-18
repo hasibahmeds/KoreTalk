@@ -174,7 +174,7 @@ const Dashboard = () => {
         const fetchUsers = async () => {
             try {
                 setLoading(prev => ({ ...prev, users: true }));
-                const response = await fetch(`https://koretalk007.onrender.com/api/users/all/${currentUser.uid}`);
+                const response = await fetch(`http://localhost:5000/api/users/all/${currentUser.uid}`);
                 const data = await response.json();
                 setUsers(data);
             } catch (error) {
@@ -193,7 +193,7 @@ const Dashboard = () => {
         const fetchChats = async () => {
             try {
                 setLoading(prev => ({ ...prev, chats: true }));
-                const response = await fetch(`https://koretalk007.onrender.com/api/chats/${currentUser.uid}`);
+                const response = await fetch(`http://localhost:5000/api/chats/${currentUser.uid}`);
                 const data = await response.json();
                 setChats(data);
             } catch (error) {
@@ -213,7 +213,7 @@ const Dashboard = () => {
             if (selectedChat) {
                 try {
                     setLoading(prev => ({ ...prev, messages: true }));
-                    const response = await fetch(`https://koretalk007.onrender.com/api/messages/${selectedChat._id}`);
+                    const response = await fetch(`http://localhost:5000/api/messages/${selectedChat._id}`);
                     const data = await response.json();
                     setMessages(data);
 
@@ -291,7 +291,7 @@ const Dashboard = () => {
         const receiver = selectedChat.participants.find(p => p.uid !== currentUser.uid);
 
         try {
-            const response = await fetch('https://koretalk007.onrender.com/api/messages', {
+            const response = await fetch('http://localhost:5000/api/messages', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -395,7 +395,7 @@ const Dashboard = () => {
             const receiver = selectedChat.participants.find(p => p.uid !== currentUser.uid);
 
             try {
-                const response = await fetch('https://koretalk007.onrender.com/api/messages', {
+                const response = await fetch('http://localhost:5000/api/messages', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -444,7 +444,7 @@ const Dashboard = () => {
         const receiver = selectedChat.participants.find(p => p.uid !== currentUser.uid);
 
         try {
-            const response = await fetch('https://koretalk007.onrender.com/api/messages/bulk-delete', {
+            const response = await fetch('http://localhost:5000/api/messages/bulk-delete', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ messageIds: idsToDelete })
@@ -471,7 +471,7 @@ const Dashboard = () => {
 
         try {
             const response = await fetch(
-                `https://koretalk007.onrender.com/api/messages/chat/${selectedChat._id}/user/${currentUser.uid}`,
+                `http://localhost:5000/api/messages/chat/${selectedChat._id}/user/${currentUser.uid}`,
                 {
                     method: 'DELETE'
                 }
@@ -481,7 +481,7 @@ const Dashboard = () => {
             if (data.success) {
                 // Refresh messages to show remaining messages
                 const messagesResponse = await fetch(
-                    `https://koretalk007.onrender.com/api/messages/${selectedChat._id}`
+                    `http://localhost:5000/api/messages/${selectedChat._id}`
                 );
                 const messagesData = await messagesResponse.json();
                 setMessages(messagesData);
@@ -500,7 +500,7 @@ const Dashboard = () => {
         const receiver = selectedChat.participants.find(p => p.uid !== currentUser.uid);
 
         try {
-            const response = await fetch(`https://koretalk007.onrender.com/api/messages/edit/${messageId}`, {
+            const response = await fetch(`http://localhost:5000/api/messages/edit/${messageId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: editContent })
@@ -533,7 +533,7 @@ const Dashboard = () => {
     // Send friend request
     const handleSendFriendRequest = async (user) => {
         try {
-            await fetch('https://koretalk007.onrender.com/api/users/friend-request', {
+            await fetch('http://localhost:5000/api/users/friend-request', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -550,7 +550,7 @@ const Dashboard = () => {
     // Accept friend request
     const handleAcceptRequest = async (requestId) => {
         try {
-            const response = await fetch('https://koretalk007.onrender.com/api/users/accept-request', {
+            const response = await fetch('http://localhost:5000/api/users/accept-request', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -563,7 +563,7 @@ const Dashboard = () => {
             if (data.success) {
                 fetchDbUser(currentUser.uid);
                 // Refresh chats
-                const chatResponse = await fetch(`https://koretalk007.onrender.com/api/chats/${currentUser.uid}`);
+                const chatResponse = await fetch(`http://localhost:5000/api/chats/${currentUser.uid}`);
                 const chatData = await chatResponse.json();
                 setChats(chatData);
             }
@@ -575,7 +575,7 @@ const Dashboard = () => {
     // Reject friend request
     const handleRejectRequest = async (requestId) => {
         try {
-            await fetch('https://koretalk007.onrender.com/api/users/reject-request', {
+            await fetch('http://localhost:5000/api/users/reject-request', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -592,7 +592,7 @@ const Dashboard = () => {
     // Check if user is blocked
     const checkBlockedStatus = async (otherUserUid) => {
         try {
-            const response = await fetch(`https://koretalk007.onrender.com/api/users/is-blocked/${currentUser.uid}/${otherUserUid}`);
+            const response = await fetch(`http://localhost:5000/api/users/is-blocked/${currentUser.uid}/${otherUserUid}`);
             const data = await response.json();
             setIsBlocked(data.isBlocked);
         } catch (error) {
@@ -606,7 +606,7 @@ const Dashboard = () => {
         if (!otherUser) return;
 
         try {
-            await fetch('https://koretalk007.onrender.com/api/users/block', {
+            await fetch('http://localhost:5000/api/users/block', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -627,7 +627,7 @@ const Dashboard = () => {
         if (!otherUser) return;
 
         try {
-            await fetch('https://koretalk007.onrender.com/api/users/unblock', {
+            await fetch('http://localhost:5000/api/users/unblock', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -727,7 +727,7 @@ const Dashboard = () => {
         for (const item of imagesToSend) {
             const base64 = item.preview.split(',')[1];
             try {
-                const response = await fetch('https://koretalk007.onrender.com/api/upload', {
+                const response = await fetch('http://localhost:5000/api/upload', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ image: base64 })
@@ -738,7 +738,7 @@ const Dashboard = () => {
                 if (data.url) {
                     const receiver = selectedChat.participants.find(p => p.uid !== currentUser.uid);
 
-                    const msgResponse = await fetch('https://koretalk007.onrender.com/api/messages', {
+                    const msgResponse = await fetch('http://localhost:5000/api/messages', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -770,7 +770,7 @@ const Dashboard = () => {
             const base64 = reader.result.split(',')[1];
 
             try {
-                const response = await fetch('https://koretalk007.onrender.com/api/upload', {
+                const response = await fetch('http://localhost:5000/api/upload', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ image: base64 })
@@ -781,7 +781,7 @@ const Dashboard = () => {
                 if (data.url) {
                     const receiver = selectedChat.participants.find(p => p.uid !== currentUser.uid);
 
-                    const msgResponse = await fetch('https://koretalk007.onrender.com/api/messages', {
+                    const msgResponse = await fetch('http://localhost:5000/api/messages', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -875,7 +875,7 @@ const Dashboard = () => {
             return;
         }
         try {
-            const response = await fetch('https://koretalk007.onrender.com/api/users/remove-friend', {
+            const response = await fetch('http://localhost:5000/api/users/remove-friend', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -887,7 +887,7 @@ const Dashboard = () => {
             if (data.success) {
                 fetchDbUser(currentUser.uid);
                 // Refresh chats to remove the chat with this friend
-                const chatResponse = await fetch(`https://koretalk007.onrender.com/api/chats/${currentUser.uid}`);
+                const chatResponse = await fetch(`http://localhost:5000/api/chats/${currentUser.uid}`);
                 const chatData = await chatResponse.json();
                 setChats(chatData);
                 // Clear selected chat if it was with this friend

@@ -533,6 +533,126 @@ textarea:focus {
     gap: 12px;
 }
 
+/* Responsive actions dropdown */
+.actions-desktop {
+    display: flex;
+    gap: 12px;
+}
+
+.actions-mobile {
+    display: none;
+    position: relative;
+}
+
+.actions-dropdown-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 6px;
+    background: var(--background-input);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.actions-dropdown-toggle:hover,
+.actions-dropdown-toggle:focus {
+    background: var(--primary-color);
+    color: white;
+    transform: translateY(-2px);
+    outline: none;
+    box-shadow: none;
+}
+
+.actions-dropdown-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    /* margin-top: 5px; */
+    margin-top: 10px;
+    background: var(--background-sidebar);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    z-index: 1000;
+    min-width: 130px;
+    max-width: 180px;
+    overflow: hidden;
+}
+
+.actions-dropdown-menu .dropdown-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 10px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.actions-dropdown-menu .dropdown-item:hover {
+    background: var(--background-input);
+}
+
+.actions-dropdown-menu .dropdown-item svg {
+    font-size: 14px;
+    width: 20px;
+    flex-shrink: 0;
+    margin-right: 8px;
+}
+
+.actions-dropdown-menu .dropdown-item span {
+    flex-grow: 1;
+}
+
+/* Responsive behavior */
+@media (max-width: 768px) {
+    .actions-desktop {
+        display: none;
+    }
+
+    .actions-mobile {
+        display: block;
+    }
+
+}
+
+@media (min-width: 769px) {
+    .actions-mobile {
+        display: none;
+    }
+}
+
+.video-call-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    background: var(--primary-color);
+    color: white;
+}
+
+.video-call-btn:hover,
+.video-call-btn:focus {
+    background: var(--primary-hover);
+    transform: translateY(-2px);
+    outline: none;
+    box-shadow: none;
+}
+
 .block-btn,
 .unblock-btn,
 .remove-messages-btn {
@@ -3224,234 +3344,106 @@ textarea:focus {
     }
 }
 
-/* ╔══════════════════════════════════════════════╗
-   ║           CALL FEATURE STYLES               ║
-   ╚══════════════════════════════════════════════╝ */
-
-/* ─── Call icon buttons in chat header ─── */
-.call-icon-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    border: none;
-    border-radius: 50%;
-    cursor: pointer;
-    font-size: 16px;
-    transition: all 0.25s ease;
-    color: var(--text-secondary);
-    background: var(--background-input);
-    flex-shrink: 0;
-}
-
-.call-icon-btn:hover:not(:disabled) {
-    transform: scale(1.1);
-    color: white;
-}
-
-.audio-call-btn:hover:not(:disabled) {
-    background: var(--success-color);
-    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
-}
-
-.video-call-btn:hover:not(:disabled) {
-    background: var(--primary-color);
-    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
-}
-
-.call-icon-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    transform: none !important;
-}
-
-/* ─── Shared overlay backdrop ─── */
-.call-overlay {
+/* Video Call Styles */
+.video-call-overlay {
     position: fixed;
-    inset: 0;
-    z-index: 3000;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.9);
+    z-index: 9999;
     display: flex;
     align-items: center;
     justify-content: center;
-    animation: fadeIn 0.25s ease;
 }
 
-/* Incoming / calling = blurred dark backdrop */
-.incoming-call-overlay,
-.calling-overlay {
-    background: rgba(10, 15, 30, 0.85);
-    backdrop-filter: blur(12px);
-}
-
-/* Active call = full-screen dark */
-.active-call-overlay {
-    background: #0b1120;
-    flex-direction: column;
-    gap: 0;
-}
-
-/* ─── Call modal card (incoming / calling) ─── */
-.call-modal {
-    background: linear-gradient(160deg, #1e293b 0%, #0f172a 100%);
-    border: 1px solid rgba(99, 102, 241, 0.25);
-    border-radius: 28px;
-    padding: 36px 32px 28px;
-    width: min(420px, 92vw);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 18px;
-    box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.04);
-    position: relative;
+.video-call-container {
+    width: 90%;
+    max-width: 1200px;
+    height: 90%;
+    background: var(--background-dark);
+    border-radius: 16px;
     overflow: hidden;
-    animation: modalIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-
-/* soft glowing ring behind modal */
-.call-modal-pulse {
-    position: absolute;
-    inset: -60px;
-    background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
-    pointer-events: none;
-    animation: pulseFade 2.5s ease-in-out infinite;
-}
-
-@keyframes pulseFade {
-    0%, 100% { opacity: 0.6; transform: scale(1); }
-    50%       { opacity: 1;   transform: scale(1.08); }
-}
-
-/* ─── Avatar in call modals ─── */
-.call-modal-avatar {
-    position: relative;
-    width: 96px;
-    height: 96px;
-}
-
-.call-modal-avatar img,
-.call-modal-avatar-placeholder {
-    width: 96px;
-    height: 96px;
-    border-radius: 50%;
-    object-fit: cover;
-    border: 3px solid var(--primary-color);
-    background-color: #334155;
-}
-
-/* animated ring around avatar for incoming call */
-.incoming-call-modal .call-modal-avatar::after {
-    content: '';
-    position: absolute;
-    inset: -8px;
-    border-radius: 50%;
-    border: 3px solid rgba(99, 102, 241, 0.5);
-    animation: ringSpin 1.8s linear infinite;
-}
-
-@keyframes ringSpin {
-    0%   { transform: rotate(0deg);   opacity: 1; }
-    100% { transform: rotate(360deg); opacity: 1; }
-}
-
-/* ─── Call modal text ─── */
-.call-modal-info {
-    text-align: center;
-}
-
-.call-modal-info h3 {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 6px;
-    letter-spacing: -0.3px;
-}
-
-.call-modal-status {
-    font-size: 14px;
-    color: var(--text-secondary);
-    margin: 0;
-}
-
-/* animated dots for "Calling..." */
-.calling-dots span {
-    display: inline-block;
-    animation: dotBounce 1.4s infinite;
-    letter-spacing: 2px;
-}
-
-@keyframes dotBounce {
-    0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
-    40%           { opacity: 1;   transform: translateY(-3px); }
-}
-
-/* ─── Modal action buttons ─── */
-.call-modal-actions {
-    display: flex;
-    gap: 32px;
-    margin-top: 8px;
-}
-
-.call-modal-actions.single {
-    justify-content: center;
-}
-
-.call-action-btn {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    border: none;
-    cursor: pointer;
-    background: none;
-    color: white;
-    transition: all 0.25s ease;
+    box-shadow: var(--shadow-lg);
 }
 
-.call-action-btn > :first-child {
-    width: 62px;
-    height: 62px;
-    border-radius: 50%;
+.video-call-header {
+    padding: 16px 24px;
+    background: var(--background-sidebar);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.call-status {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.call-header-buttons {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.cancel-call-btn {
+    background: var(--warning-color);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.cancel-call-btn:hover {
+    background: #d97706;
+    transform: scale(1.05);
+}
+
+.close-call-btn {
+    background: var(--error-color);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    width: 40px;
+    height: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 24px;
-    transition: all 0.25s ease;
+    cursor: pointer;
+    transition: all 0.3s ease;
 }
 
-.call-action-btn span {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
+.close-call-btn:hover {
+    background: #dc2626;
+    transform: scale(1.05);
 }
 
-.answer-call-btn > :first-child {
-    background: var(--success-color);
-    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
-    animation: answerPulse 1.8s ease-in-out infinite;
+.video-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 20px;
+    position: relative;
 }
 
-@keyframes answerPulse {
-    0%, 100% { box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4); }
-    50%       { box-shadow: 0 6px 30px rgba(16, 185, 129, 0.7); }
-}
-
-.reject-call-btn > :first-child {
-    background: var(--error-color);
-    box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
-}
-
-.call-action-btn:hover > :first-child {
-    transform: scale(1.1);
-}
-
-/* ─── Active call screen ─── */
-
-/* Video container (full screen) */
-.call-video-container {
-    position: absolute;
-    inset: 0;
-    z-index: 0;
+.video-remote {
+    background: var(--background-sidebar);
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .remote-video {
@@ -3460,337 +3452,246 @@ textarea:focus {
     object-fit: cover;
 }
 
-.local-video {
-    position: absolute;
-    bottom: 100px;
-    right: 16px;
-    width: 120px;
-    height: 160px;
-    border-radius: 14px;
-    object-fit: cover;
-    border: 2px solid rgba(255,255,255,0.3);
-    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-    z-index: 10;
-}
-
-/* Audio call avatar */
-.active-call-avatar-container {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-top: 80px;
-    margin-bottom: 24px;
-    z-index: 1;
-}
-
-.active-call-avatar {
-    width: 120px;
-    height: 120px;
-    border-radius: 50%;
-    object-fit: cover;
-    border: 4px solid var(--primary-color);
-    position: relative;
-    z-index: 2;
-}
-
-.active-call-avatar-placeholder {
-    width: 120px;
-    height: 120px;
-    border-radius: 50%;
-    background: #334155;
-    border: 4px solid var(--primary-color);
-    position: relative;
-    z-index: 2;
-}
-
-/* Animated wave rings */
-.active-call-wave {
-    position: absolute;
-    inset: -20px;
-    border-radius: 50%;
-    border: 3px solid rgba(99, 102, 241, 0.35);
-    animation: waveRing 2s ease-in-out infinite;
-}
-
-.active-call-wave::after {
-    content: '';
-    position: absolute;
-    inset: -20px;
-    border-radius: 50%;
-    border: 3px solid rgba(99, 102, 241, 0.2);
-    animation: waveRing 2s ease-in-out 0.7s infinite;
-}
-
-@keyframes waveRing {
-    0%   { transform: scale(1);   opacity: 0.8; }
-    100% { transform: scale(1.5); opacity: 0; }
-}
-
-/* Active call info */
-.active-call-info {
-    text-align: center;
-    z-index: 1;
-    margin-bottom: 16px;
-}
-
-.active-call-info h3 {
-    font-size: 26px;
-    font-weight: 700;
-    color: white;
-    margin: 0 0 8px;
-}
-
-.active-call-timer {
-    font-size: 18px;
-    color: rgba(255, 255, 255, 0.65);
-    font-variant-numeric: tabular-nums;
-    letter-spacing: 1px;
-    margin: 0;
-}
-
-/* Active call control buttons */
-.active-call-controls {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 24px;
-    padding: 20px 24px 32px;
-    z-index: 1;
-    flex-wrap: wrap;
-}
-
-.active-call-btn {
+.video-placeholder {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
-    border: none;
-    cursor: pointer;
-    background: none;
-    color: white;
-    transition: all 0.25s ease;
-    min-width: 60px;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: 14px;
 }
 
-.active-call-btn > svg {
-    width: 52px;
-    height: 52px;
+.video-placeholder svg {
+    font-size: 48px;
+    margin-bottom: 12px;
+}
+
+.video-local {
+    position: absolute;
+    bottom: 30px;
+    right: 30px;
+    width: 240px;
+    height: 180px;
+    background: var(--background-sidebar);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 3px solid var(--primary-color);
+    z-index: 10;
+}
+
+.local-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.local-video-label {
+    position: absolute;
+    bottom: 8px;
+    left: 8px;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.video-controls {
+    padding: 20px;
+    background: var(--background-sidebar);
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    border-top: 1px solid var(--border-color);
+}
+
+.control-btn {
+    width: 60px;
+    height: 60px;
     border-radius: 50%;
+    border: none;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 22px;
-    padding: 14px;
-    background: rgba(255, 255, 255, 0.12);
-    box-sizing: border-box;
-    transition: all 0.25s ease;
+    font-size: 24px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    color: white;
 }
 
-.active-call-btn span {
-    font-size: 11px;
-    font-weight: 500;
-    color: rgba(255,255,255,0.7);
-}
-
-.active-call-btn:hover > svg {
-    background: rgba(255, 255, 255, 0.22);
-    transform: scale(1.08);
-}
-
-/* Active state (speaker ON) */
-.active-call-btn.active > svg {
+.control-btn.active {
     background: var(--primary-color);
-    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.45);
 }
 
-/* Muted state */
-.active-call-btn.muted > svg {
-    background: rgba(239, 68, 68, 0.25);
-    color: #ef4444;
+.control-btn.inactive {
+    background: var(--background-input);
 }
 
-/* End call button — red pill */
-.end-call-btn > svg {
-    background: var(--error-color) !important;
-    box-shadow: 0 4px 18px rgba(239, 68, 68, 0.45);
+.control-btn:hover {
+    transform: scale(1.1);
 }
 
-.end-call-btn:hover > svg {
-    background: #dc2626 !important;
-    transform: scale(1.12);
+.end-call-btn {
+    background: var(--error-color);
 }
 
-/* ─── Responsive: xs (< 576px) ─── */
-@media (max-width: 575px) {
-    .call-modal {
-        padding: 28px 20px 22px;
-        gap: 14px;
-        border-radius: 22px;
+.end-call-btn:hover {
+    background: #dc2626;
+}
+
+/* Incoming Call Notification */
+.incoming-call-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 9998;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.incoming-call-modal {
+    background: var(--background-sidebar);
+    border-radius: 16px;
+    padding: 32px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+    box-shadow: var(--shadow-lg);
+}
+
+.incoming-call-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.call-icon {
+    font-size: 32px;
+    color: var(--primary-color);
+}
+
+.incoming-call-header h3 {
+    font-size: 24px;
+    color: var(--text-primary);
+}
+
+.incoming-call-body p {
+    color: var(--text-secondary);
+    margin-bottom: 30px;
+    font-size: 16px;
+}
+
+.incoming-call-actions {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+}
+
+.accept-call-btn,
+.reject-call-btn {
+    padding: 12px 24px;
+    border-radius: 8px;
+    border: none;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+}
+
+.accept-call-btn {
+    background: var(--success-color);
+    color: white;
+}
+
+.accept-call-btn:hover {
+    background: #0da271;
+}
+
+.reject-call-btn {
+    background: var(--error-color);
+    color: white;
+}
+
+.reject-call-btn:hover {
+    background: #dc2626;
+}
+
+/* Responsive Video Call */
+@media (max-width: 768px) {
+    .video-grid {
+        grid-template-columns: 1fr;
+        gap: 10px;
+        padding: 10px;
     }
 
-    .call-modal-avatar,
-    .call-modal-avatar img,
-    .call-modal-avatar-placeholder {
-        width: 80px;
-        height: 80px;
+    .video-local {
+        width: 160px;
+        height: 120px;
+        bottom: 20px;
+        right: 20px;
     }
 
-    .call-modal-info h3 { font-size: 18px; }
-    .call-modal-status  { font-size: 13px; }
+    .video-controls {
+        gap: 10px;
+        padding: 15px;
+    }
 
-    .call-modal-actions { gap: 24px; }
-
-    .call-action-btn > :first-child {
-        width: 54px;
-        height: 54px;
+    .control-btn {
+        width: 50px;
+        height: 50px;
         font-size: 20px;
     }
 
-    /* Active call */
-    .active-call-avatar,
-    .active-call-avatar-placeholder {
-        width: 90px;
+    .incoming-call-modal {
+        padding: 24px;
+    }
+
+    .incoming-call-actions {
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .accept-call-btn,
+    .reject-call-btn {
+        width: 100%;
+        justify-content: center;
+    }
+}
+
+@media (max-width: 576px) {
+    .video-call-container {
+        width: 100%;
+        height: 100%;
+        border-radius: 0;
+    }
+
+    .video-local {
+        width: 120px;
         height: 90px;
-    }
-
-    .active-call-avatar-container { margin-top: 48px; }
-
-    .active-call-info h3    { font-size: 20px; }
-    .active-call-timer      { font-size: 15px; }
-
-    .active-call-controls {
-        gap: 16px;
-        padding: 16px 12px 24px;
-    }
-
-    .active-call-btn > svg {
-        width: 46px;
-        height: 46px;
-        font-size: 18px;
-        padding: 12px;
-    }
-
-    .active-call-btn span { font-size: 10px; }
-
-    .local-video {
-        width: 88px;
-        height: 120px;
-        bottom: 80px;
+        bottom: 10px;
         right: 10px;
     }
 
-    .call-icon-btn {
-        width: 30px;
-        height: 30px;
+    .local-video-label {
+        font-size: 10px;
+        padding: 2px 6px;
+    }
+
+    .call-status {
         font-size: 14px;
     }
-}
 
-/* ─── Responsive: sm (576px – 767px) ─── */
-@media (min-width: 576px) and (max-width: 767px) {
-    .call-modal { width: min(380px, 90vw); }
-
-    .active-call-controls { gap: 20px; }
-
-    .local-video {
-        width: 100px;
-        height: 140px;
-    }
-}
-
-/* ─── Responsive: md (768px – 991px) ─── */
-@media (min-width: 768px) and (max-width: 991px) {
-    .call-modal { width: 400px; }
-
-    .active-call-controls { gap: 28px; }
-}
-
-/* ─── Responsive: lg (992px – 1199px) ─── */
-@media (min-width: 992px) and (max-width: 1199px) {
-    .call-icon-btn {
+    .close-call-btn {
         width: 36px;
         height: 36px;
-        font-size: 17px;
     }
 }
-
-/* ─── Responsive: xl (1200px – 1399px) ─── */
-@media (min-width: 1200px) and (max-width: 1399px) {
-    .call-icon-btn {
-        width: 36px;
-        height: 36px;
-        font-size: 17px;
-    }
-
-    .active-call-btn > svg {
-        width: 56px;
-        height: 56px;
-    }
-}
-
-/* ─── Responsive: xxl (≥ 1400px) ─── */
-@media (min-width: 1400px) {
-    .call-modal { width: 440px; }
-
-    .call-modal-info h3 { font-size: 24px; }
-
-    .call-action-btn > :first-child {
-        width: 68px;
-        height: 68px;
-        font-size: 26px;
-    }
-
-    .active-call-avatar,
-    .active-call-avatar-placeholder {
-        width: 140px;
-        height: 140px;
-    }
-
-    .active-call-info h3  { font-size: 30px; }
-    .active-call-timer    { font-size: 20px; }
-
-    .active-call-btn > svg {
-        width: 60px;
-        height: 60px;
-        font-size: 24px;
-        padding: 16px;
-    }
-
-    .active-call-controls { gap: 32px; }
-
-    .call-icon-btn {
-        width: 38px;
-        height: 38px;
-        font-size: 18px;
-    }
-
-    .local-video {
-        width: 150px;
-        height: 200px;
-    }
-}
-
-/* ─── Landscape mobile: keep controls visible ─── */
-@media (max-height: 600px) and (max-width: 768px) {
-    .active-call-avatar-container { margin-top: 20px; margin-bottom: 12px; }
-
-    .active-call-avatar,
-    .active-call-avatar-placeholder { width: 70px; height: 70px; }
-
-    .active-call-info { margin-bottom: 8px; }
-    .active-call-info h3 { font-size: 16px; }
-    .active-call-timer { font-size: 13px; }
-
-    .active-call-controls {
-        padding: 8px 12px 12px;
-        gap: 14px;
-    }
-
-    .active-call-btn > svg {
-        width: 40px;
-        height: 40px;
-        font-size: 16px;
-        padding: 10px;
-    }
-}
