@@ -1,5 +1,5 @@
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
 import {
@@ -7,8 +7,12 @@ import {
     FiTrash2, FiCheck, FiX, FiUserPlus,
     FiMessageCircle, FiUsers, FiSearch, FiLogOut, FiEdit,
     FiLock, FiUnlock, FiMenu, FiSmile, FiDownload,
-    FiMoreHorizontal, FiMic, FiPlay, FiPause
+    FiMoreHorizontal, FiMic, FiPlay, FiPause,
+    FiPhone, FiPhoneOff, FiPhoneIncoming,
+    FiVideo, FiVideoOff, FiVolume2, FiVolumeX,
+    FiMicOff
 } from 'react-icons/fi';
+import { PiPlayCircleDuotone, PiPauseCircleDuotone } from "react-icons/pi";
 import EmojiPicker from '../components/EmojiPicker';
 import './Dashboard.css';
 
@@ -65,7 +69,7 @@ const AudioPlayer = ({ src, durationLabel, isSentByMe }) => {
                 onEnded={onEnded}
             />
             <button type="button" className="audio-play-btn" onClick={togglePlay}>
-                {isPlaying ? <FiPause /> : <FiPlay />}
+                {isPlaying ? <PiPauseCircleDuotone /> : <PiPlayCircleDuotone />}
             </button>
             <div className="audio-progress-container">
                 <input
@@ -91,7 +95,9 @@ const Dashboard = () => {
     const {
         sendMessage, sendDeletedMessage, sendEditedMessage,
         sendFriendRequest, sendTyping, onReceiveMessage,
-        onMessageDeleted, onFriendRequest, onMessageEdited, socket
+        onMessageDeleted, onFriendRequest, onMessageEdited, socket,
+        sendCallOffer, sendCallAnswer, sendCallRejected, sendCallEnded, sendIceCandidate,
+        onIncomingCall, onCallAnswered, onCallRejected, onCallEnded, onIceCandidate
     } = useSocket();
 
     const [users, setUsers] = useState([]);
@@ -114,6 +120,24 @@ const Dashboard = () => {
     const mediaRecorderRef = useRef(null);
     const audioChunksRef = useRef([]);
     const timerIntervalRef = useRef(null);
+
+    // ───── Call states ─────
+    const [callState, setCallState] = useState('idle'); // idle | calling | incoming | active
+    const [callType, setCallType] = useState('audio'); // audio | video
+    const [callDuration, setCallDuration] = useState(0);
+    const [isMuted, setIsMuted] = useState(false);
+    const [isSpeakerOn, setIsSpeakerOn] = useState(true);
+    const [isVideoOn, setIsVideoOn] = useState(true);
+    const [incomingCallData, setIncomingCallData] = useState(null); // { callerId, callerName, callerPhoto, callType, offer }
+    const [callPartner, setCallPartner] = useState(null); // { uid, displayName, photoURL }
+
+    const peerRef = useRef(null);
+    const localStreamRef = useRef(null);
+    const remoteStreamRef = useRef(null);
+    const localVideoRef = useRef(null);
+    const remoteVideoRef = useRef(null);
+    const callDurationRef = useRef(null);
+    const pendingCandidatesRef = useRef([]);
 
     const [isTyping, setIsTyping] = useState(false);
     const [showFriendRequests, setShowFriendRequests] = useState(false);
@@ -160,6 +184,179 @@ const Dashboard = () => {
             }
         };
     }, []);
+
+    // ─── WebRTC helpers ───
+    const ICE_SERVERS = {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+        ]
+    };
+
+    const cleanupCall = useCallback(() => {
+        if (callDurationRef.current) clearInterval(callDurationRef.current);
+        if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
+        if (localStreamRef.current) {
+            localStreamRef.current.getTracks().forEach(t => t.stop());
+            localStreamRef.current = null;
+        }
+        remoteStreamRef.current = null;
+        pendingCandidatesRef.current = [];
+        setCallState('idle');
+        setCallDuration(0);
+        setIsMuted(false);
+        setIsSpeakerOn(true);
+        setIsVideoOn(true);
+        setIncomingCallData(null);
+        setCallPartner(null);
+    }, []);
+
+    const getMedia = async (type) => {
+        try {
+            const constraints = type === 'video'
+                ? { audio: true, video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } }
+                : { audio: true, video: false };
+            return await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (err) {
+            console.error('Media error:', err);
+            throw err;
+        }
+    };
+
+    const createPeer = (stream, remoteUserId, isInitiator) => {
+        const peer = new RTCPeerConnection(ICE_SERVERS);
+
+        stream.getTracks().forEach(track => peer.addTrack(track, stream));
+
+        peer.onicecandidate = (e) => {
+            if (e.candidate) {
+                sendIceCandidate(remoteUserId, e.candidate);
+            }
+        };
+
+        peer.ontrack = (e) => {
+            remoteStreamRef.current = e.streams[0];
+            if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = e.streams[0];
+            }
+        };
+
+        peer.onconnectionstatechange = () => {
+            if (peer.connectionState === 'disconnected' || peer.connectionState === 'failed') {
+                cleanupCall();
+            }
+        };
+
+        return peer;
+    };
+
+    // Initiate a call
+    const initiateCall = async (type = 'audio') => {
+        if (!selectedChat || callState !== 'idle') return;
+        const partner = getOtherUser(selectedChat);
+        if (!partner) return;
+        setCallType(type);
+        setCallPartner(partner);
+        setCallState('calling');
+        try {
+            const stream = await getMedia(type);
+            localStreamRef.current = stream;
+            if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+
+            const peer = createPeer(stream, partner.uid, true);
+            peerRef.current = peer;
+
+            const offer = await peer.createOffer();
+            await peer.setLocalDescription(offer);
+
+            sendCallOffer(
+                partner.uid,
+                currentUser.uid,
+                dbUser?.displayName || currentUser?.displayName || currentUser.email,
+                dbUser?.photoURL || currentUser?.photoURL || '',
+                offer,
+                type
+            );
+        } catch (err) {
+            console.error('Call initiation failed:', err);
+            alert('Could not access microphone' + (type === 'video' ? '/camera' : '') + '. Please check permissions.');
+            cleanupCall();
+        }
+    };
+
+    // Answer incoming call
+    const handleAnswerCall = async () => {
+        if (!incomingCallData) return;
+        const { callerId, offer, callType: incomingType } = incomingCallData;
+        setCallType(incomingType);
+        setCallState('active');
+        startCallTimer();
+        try {
+            const stream = await getMedia(incomingType);
+            localStreamRef.current = stream;
+            if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+
+            const peer = createPeer(stream, callerId, false);
+            peerRef.current = peer;
+
+            await peer.setRemoteDescription(new RTCSessionDescription(offer));
+
+            // Add pending candidates
+            for (const c of pendingCandidatesRef.current) {
+                await peer.addIceCandidate(new RTCIceCandidate(c));
+            }
+            pendingCandidatesRef.current = [];
+
+            const answer = await peer.createAnswer();
+            await peer.setLocalDescription(answer);
+            sendCallAnswer(callerId, answer);
+        } catch (err) {
+            console.error('Answer call failed:', err);
+            alert('Could not access microphone' + (incomingType === 'video' ? '/camera' : '') + '.');
+            sendCallRejected(callerId);
+            cleanupCall();
+        }
+    };
+
+    const handleRejectCall = () => {
+        if (incomingCallData) {
+            sendCallRejected(incomingCallData.callerId);
+        }
+        cleanupCall();
+    };
+
+    const handleEndCall = () => {
+        if (callPartner) sendCallEnded(callPartner.uid);
+        else if (incomingCallData) sendCallEnded(incomingCallData.callerId);
+        cleanupCall();
+    };
+
+    const toggleMute = () => {
+        if (localStreamRef.current) {
+            localStreamRef.current.getAudioTracks().forEach(t => { t.enabled = isMuted; });
+            setIsMuted(m => !m);
+        }
+    };
+
+    const toggleVideo = () => {
+        if (localStreamRef.current) {
+            localStreamRef.current.getVideoTracks().forEach(t => { t.enabled = !isVideoOn; });
+            setIsVideoOn(v => !v);
+        }
+    };
+
+    const toggleSpeaker = () => setIsSpeakerOn(s => !s);
+
+    const startCallTimer = () => {
+        setCallDuration(0);
+        callDurationRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+    };
+
+    const formatCallDuration = (secs) => {
+        const m = Math.floor(secs / 60).toString().padStart(2, '0');
+        const s = (secs % 60).toString().padStart(2, '0');
+        return `${m}:${s}`;
+    };
 
     // Close sidebar when chat is selected on mobile
     useEffect(() => {
@@ -276,6 +473,88 @@ const Dashboard = () => {
             }
         };
     }, [selectedChat, currentUser, onReceiveMessage, onMessageDeleted, onMessageEdited, onFriendRequest, fetchDbUser, socket]);
+
+    // ─── Call socket listeners ───
+    useEffect(() => {
+        if (!socket) return;
+
+        const handleIncomingCall = (data) => {
+            // Only show if not already in a call
+            if (callState === 'idle') {
+                setIncomingCallData(data);
+                // find partner from users list
+                setCallPartner({ uid: data.callerId, displayName: data.callerName, photoURL: data.callerPhoto });
+                setCallState('incoming');
+            }
+        };
+
+        const handleCallAnswered = async ({ answer }) => {
+            try {
+                if (peerRef.current && peerRef.current.signalingState !== 'stable') {
+                    await peerRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+                    // Flush pending candidates
+                    for (const c of pendingCandidatesRef.current) {
+                        await peerRef.current.addIceCandidate(new RTCIceCandidate(c));
+                    }
+                    pendingCandidatesRef.current = [];
+                    setCallState('active');
+                    startCallTimer();
+                }
+            } catch (err) {
+                console.error('Error setting remote description:', err);
+            }
+        };
+
+        const handleCallRejected = () => {
+            cleanupCall();
+        };
+
+        const handleCallEnded = () => {
+            cleanupCall();
+        };
+
+        const handleIceCandidate = async ({ candidate }) => {
+            if (peerRef.current && candidate) {
+                try {
+                    if (peerRef.current.remoteDescription) {
+                        await peerRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+                    } else {
+                        pendingCandidatesRef.current.push(candidate);
+                    }
+                } catch (err) {
+                    console.error('ICE candidate error:', err);
+                }
+            }
+        };
+
+        onIncomingCall(handleIncomingCall);
+        onCallAnswered(handleCallAnswered);
+        onCallRejected(handleCallRejected);
+        onCallEnded(handleCallEnded);
+        onIceCandidate(handleIceCandidate);
+
+        return () => {
+            socket.off('incoming_call', handleIncomingCall);
+            socket.off('call_answered', handleCallAnswered);
+            socket.off('call_rejected', handleCallRejected);
+            socket.off('call_ended', handleCallEnded);
+            socket.off('ice_candidate', handleIceCandidate);
+        };
+    }, [socket, callState, cleanupCall, onIncomingCall, onCallAnswered, onCallRejected, onCallEnded, onIceCandidate]);
+
+    // Sync remote video when active
+    useEffect(() => {
+        if (callState === 'active' && remoteVideoRef.current && remoteStreamRef.current) {
+            remoteVideoRef.current.srcObject = remoteStreamRef.current;
+        }
+    }, [callState]);
+
+    // Sync local video when stream is ready
+    useEffect(() => {
+        if (localStreamRef.current && localVideoRef.current) {
+            localVideoRef.current.srcObject = localStreamRef.current;
+        }
+    });
 
     // Scroll to bottom when messages change
     useEffect(() => {
@@ -1218,6 +1497,23 @@ const Dashboard = () => {
                                     />
                                     <span className="chat-name">{getOtherUser(selectedChat)?.displayName || getOtherUser(selectedChat)?.email}</span>
                                     <div className="chat-header-actions">
+                                        {/* Call button */}
+                                        <button
+                                            className="call-icon-btn audio-call-btn"
+                                            onClick={() => initiateCall('audio')}
+                                            title="Audio Call"
+                                            disabled={callState !== 'idle'}
+                                        >
+                                            <FiPhone />
+                                        </button>
+                                        <button
+                                            className="call-icon-btn video-call-btn"
+                                            onClick={() => initiateCall('video')}
+                                            title="Video Call"
+                                            disabled={callState !== 'idle'}
+                                        >
+                                            <FiVideo />
+                                        </button>
                                         <button
                                             className="remove-messages-btn"
                                             onClick={handleRemoveAllMyMessages}
@@ -1658,6 +1954,134 @@ const Dashboard = () => {
                                 <FiSend />
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ══════════ INCOMING CALL MODAL ══════════ */}
+            {callState === 'incoming' && incomingCallData && (
+                <div className="call-overlay incoming-call-overlay">
+                    <div className="call-modal incoming-call-modal">
+                        <div className="call-modal-pulse" />
+                        <div className="call-modal-avatar">
+                            {incomingCallData.callerPhoto ? (
+                                <img src={incomingCallData.callerPhoto} alt={incomingCallData.callerName} />
+                            ) : (
+                                <div className="call-modal-avatar-placeholder" />
+                            )}
+                        </div>
+                        <div className="call-modal-info">
+                            <h3>{incomingCallData.callerName || 'Unknown'}</h3>
+                            <p className="call-modal-status">
+                                {incomingCallData.callType === 'video' ? '📹 Incoming Video Call' : '📞 Incoming Audio Call'}
+                            </p>
+                        </div>
+                        <div className="call-modal-actions">
+                            <button className="call-action-btn reject-call-btn" onClick={handleRejectCall} title="Reject">
+                                <FiPhoneOff />
+                                <span>Decline</span>
+                            </button>
+                            <button className="call-action-btn answer-call-btn" onClick={handleAnswerCall} title="Answer">
+                                <FiPhone />
+                                <span>Answer</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ══════════ CALLING (outgoing) OVERLAY ══════════ */}
+            {callState === 'calling' && callPartner && (
+                <div className="call-overlay calling-overlay">
+                    <div className="call-modal calling-modal">
+                        <div className="call-modal-pulse" />
+                        <div className="call-modal-avatar">
+                            {callPartner.photoURL ? (
+                                <img src={callPartner.photoURL} alt={callPartner.displayName} />
+                            ) : (
+                                <div className="call-modal-avatar-placeholder" />
+                            )}
+                        </div>
+                        <div className="call-modal-info">
+                            <h3>{callPartner.displayName || callPartner.email || 'Unknown'}</h3>
+                            <p className="call-modal-status calling-dots">Calling<span>...</span></p>
+                        </div>
+                        <div className="call-modal-actions single">
+                            <button className="call-action-btn reject-call-btn" onClick={handleEndCall} title="Cancel">
+                                <FiPhoneOff />
+                                <span>Cancel</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ══════════ ACTIVE CALL OVERLAY ══════════ */}
+            {callState === 'active' && (
+                <div className="call-overlay active-call-overlay">
+                    {/* Video streams (shown in video call) */}
+                    {callType === 'video' && (
+                        <div className="call-video-container">
+                            <video ref={remoteVideoRef} className="remote-video" autoPlay playsInline />
+                            <video ref={localVideoRef} className="local-video" autoPlay playsInline muted />
+                        </div>
+                    )}
+
+                    {/* Audio call avatar */}
+                    {callType === 'audio' && callPartner && (
+                        <div className="active-call-avatar-container">
+                            {callPartner.photoURL ? (
+                                <img src={callPartner.photoURL} alt={callPartner.displayName} className="active-call-avatar" />
+                            ) : (
+                                <div className="active-call-avatar-placeholder" />
+                            )}
+                            <div className="active-call-wave" />
+                        </div>
+                    )}
+
+                    <div className="active-call-info">
+                        <h3>{callPartner?.displayName || callPartner?.email || incomingCallData?.callerName || 'Unknown'}</h3>
+                        <p className="active-call-timer">{formatCallDuration(callDuration)}</p>
+                    </div>
+
+                    <div className="active-call-controls">
+                        {/* Speaker */}
+                        <button
+                            className={`active-call-btn ${isSpeakerOn ? 'active' : ''}`}
+                            onClick={toggleSpeaker}
+                            title={isSpeakerOn ? 'Speaker On' : 'Speaker Off'}
+                        >
+                            {isSpeakerOn ? <FiVolume2 /> : <FiVolumeX />}
+                            <span>{isSpeakerOn ? 'Speaker' : 'Speaker'}</span>
+                        </button>
+
+                        {/* Mute */}
+                        <button
+                            className={`active-call-btn ${isMuted ? 'muted' : ''}`}
+                            onClick={toggleMute}
+                            title={isMuted ? 'Unmute' : 'Mute'}
+                        >
+                            {isMuted ? <FiMicOff /> : <FiMic />}
+                            <span>{isMuted ? 'Unmute' : 'Mute'}</span>
+                        </button>
+
+                        {/* Video (only in video call) */}
+                        {callType === 'video' && (
+                            <button
+                                className={`active-call-btn ${!isVideoOn ? 'muted' : ''}`}
+                                onClick={toggleVideo}
+                                title={isVideoOn ? 'Turn off camera' : 'Turn on camera'}
+                            >
+                                {isVideoOn ? <FiVideo /> : <FiVideoOff />}
+                                <span>{isVideoOn ? 'Video' : 'Video'}</span>
+                            </button>
+                        )}
+
+                        {/* End Call */}
+                        <button className="active-call-btn end-call-btn" onClick={handleEndCall} title="End Call">
+                            <FiPhoneOff />
+                            <span>End</span>
+                        </button>
                     </div>
                 </div>
             )}

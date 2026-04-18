@@ -120,6 +120,32 @@ io.on('connection', (socket) => {
         io.to(receiverId).emit('typing', { isTyping });
     });
 
+    // ───── WebRTC Call Signaling ─────
+    socket.on('call_offer', (data) => {
+        // data: { receiverId, callerId, callerName, callerPhoto, offer, callType }
+        io.to(data.receiverId).emit('incoming_call', data);
+    });
+
+    socket.on('call_answer', (data) => {
+        // data: { callerId, answer }
+        io.to(data.callerId).emit('call_answered', data);
+    });
+
+    socket.on('call_rejected', (data) => {
+        // data: { callerId }
+        io.to(data.callerId).emit('call_rejected');
+    });
+
+    socket.on('call_ended', (data) => {
+        // data: { receiverId }
+        io.to(data.receiverId).emit('call_ended');
+    });
+
+    socket.on('ice_candidate', (data) => {
+        // data: { receiverId, candidate }
+        io.to(data.receiverId).emit('ice_candidate', { candidate: data.candidate });
+    });
+
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);
     });

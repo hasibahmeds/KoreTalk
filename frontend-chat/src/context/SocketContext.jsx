@@ -79,6 +79,38 @@ export const SocketProvider = ({ children }) => {
         }
     };
 
+    // ───── WebRTC Call Signaling ─────
+    const sendCallOffer = (receiverId, callerId, callerName, callerPhoto, offer, callType) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call_offer', { receiverId, callerId, callerName, callerPhoto, offer, callType });
+        }
+    };
+
+    const sendCallAnswer = (callerId, answer) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call_answer', { callerId, answer });
+        }
+    };
+
+    const sendCallRejected = (callerId) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call_rejected', { callerId });
+        }
+    };
+
+    const sendCallEnded = (receiverId) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call_ended', { receiverId });
+        }
+    };
+
+    const sendIceCandidate = (receiverId, candidate) => {
+        if (socketRef.current) {
+            socketRef.current.emit('ice_candidate', { receiverId, candidate });
+        }
+    };
+
+    // ───── Listener helpers ─────
     const onReceiveMessage = (callback) => {
         if (socketRef.current) {
             socketRef.current.on('receive_message', callback);
@@ -115,6 +147,36 @@ export const SocketProvider = ({ children }) => {
         }
     };
 
+    const onIncomingCall = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('incoming_call', callback);
+        }
+    };
+
+    const onCallAnswered = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call_answered', callback);
+        }
+    };
+
+    const onCallRejected = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call_rejected', callback);
+        }
+    };
+
+    const onCallEnded = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call_ended', callback);
+        }
+    };
+
+    const onIceCandidate = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('ice_candidate', callback);
+        }
+    };
+
     const removeAllListeners = () => {
         if (socketRef.current) {
             socketRef.current.removeAllListeners();
@@ -130,12 +192,25 @@ export const SocketProvider = ({ children }) => {
         sendFriendRequest,
         sendFriendRequestAccepted,
         sendTyping,
+        // call signaling emitters
+        sendCallOffer,
+        sendCallAnswer,
+        sendCallRejected,
+        sendCallEnded,
+        sendIceCandidate,
+        // message listeners
         onReceiveMessage,
         onMessageEdited,
         onMessageDeleted,
         onFriendRequest,
         onFriendRequestAccepted,
         onTyping,
+        // call listeners
+        onIncomingCall,
+        onCallAnswered,
+        onCallRejected,
+        onCallEnded,
+        onIceCandidate,
         removeAllListeners
     };
 

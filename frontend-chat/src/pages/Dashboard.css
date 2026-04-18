@@ -3035,7 +3035,7 @@ textarea:focus {
 .recording-indicator {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     flex: 1;
     justify-content: center;
     color: var(--error-color);
@@ -3109,7 +3109,7 @@ textarea:focus {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 2px 4px;
+    /* padding: 2px 4px; */
     min-width: 220px;
     max-width: 320px;
     box-sizing: border-box;
@@ -3122,7 +3122,8 @@ textarea:focus {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    font-size: 20px;
+    /* font-size: 20px; */
+    font-size: 32px;
     transition: all 0.2s ease;
     flex-shrink: 0;
     padding: 0;
@@ -3140,7 +3141,7 @@ textarea:focus {
 }
 
 .audio-play-btn:hover {
-    transform: scale(1.08);
+    transform: scale(1.05);
 }
 
 .audio-progress-container {
@@ -3159,7 +3160,8 @@ textarea:focus {
 /* Track styling */
 .audio-slider::-webkit-slider-runnable-track {
     width: 100%;
-    height: 4px;
+    /* height: 4px; */
+    height: 3px;
     cursor: pointer;
     background: rgba(255, 255, 255, 0.3);
     border-radius: 2px;
@@ -3171,8 +3173,10 @@ textarea:focus {
 
 /* Thumb styling */
 .audio-slider::-webkit-slider-thumb {
-    height: 12px;
-    width: 12px;
+    /* height: 12px;
+    width: 12px; */
+    height: 10px;
+    width: 10px;
     border-radius: 50%;
     background: white;
     cursor: pointer;
@@ -3210,7 +3214,8 @@ textarea:focus {
     .audio-play-btn {
         width: 28px;
         height: 28px;
-        font-size: 16px;
+        /* font-size: 16px; */
+        font-size: 27px;
     }
 
     .audio-duration {
@@ -3218,3 +3223,574 @@ textarea:focus {
         min-width: 28px;
     }
 }
+
+/* ╔══════════════════════════════════════════════╗
+   ║           CALL FEATURE STYLES               ║
+   ╚══════════════════════════════════════════════╝ */
+
+/* ─── Call icon buttons in chat header ─── */
+.call-icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 16px;
+    transition: all 0.25s ease;
+    color: var(--text-secondary);
+    background: var(--background-input);
+    flex-shrink: 0;
+}
+
+.call-icon-btn:hover:not(:disabled) {
+    transform: scale(1.1);
+    color: white;
+}
+
+.audio-call-btn:hover:not(:disabled) {
+    background: var(--success-color);
+    box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+}
+
+.video-call-btn:hover:not(:disabled) {
+    background: var(--primary-color);
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+}
+
+.call-icon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none !important;
+}
+
+/* ─── Shared overlay backdrop ─── */
+.call-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.25s ease;
+}
+
+/* Incoming / calling = blurred dark backdrop */
+.incoming-call-overlay,
+.calling-overlay {
+    background: rgba(10, 15, 30, 0.85);
+    backdrop-filter: blur(12px);
+}
+
+/* Active call = full-screen dark */
+.active-call-overlay {
+    background: #0b1120;
+    flex-direction: column;
+    gap: 0;
+}
+
+/* ─── Call modal card (incoming / calling) ─── */
+.call-modal {
+    background: linear-gradient(160deg, #1e293b 0%, #0f172a 100%);
+    border: 1px solid rgba(99, 102, 241, 0.25);
+    border-radius: 28px;
+    padding: 36px 32px 28px;
+    width: min(420px, 92vw);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.04);
+    position: relative;
+    overflow: hidden;
+    animation: modalIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* soft glowing ring behind modal */
+.call-modal-pulse {
+    position: absolute;
+    inset: -60px;
+    background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
+    pointer-events: none;
+    animation: pulseFade 2.5s ease-in-out infinite;
+}
+
+@keyframes pulseFade {
+    0%, 100% { opacity: 0.6; transform: scale(1); }
+    50%       { opacity: 1;   transform: scale(1.08); }
+}
+
+/* ─── Avatar in call modals ─── */
+.call-modal-avatar {
+    position: relative;
+    width: 96px;
+    height: 96px;
+}
+
+.call-modal-avatar img,
+.call-modal-avatar-placeholder {
+    width: 96px;
+    height: 96px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 3px solid var(--primary-color);
+    background-color: #334155;
+}
+
+/* animated ring around avatar for incoming call */
+.incoming-call-modal .call-modal-avatar::after {
+    content: '';
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+    border: 3px solid rgba(99, 102, 241, 0.5);
+    animation: ringSpin 1.8s linear infinite;
+}
+
+@keyframes ringSpin {
+    0%   { transform: rotate(0deg);   opacity: 1; }
+    100% { transform: rotate(360deg); opacity: 1; }
+}
+
+/* ─── Call modal text ─── */
+.call-modal-info {
+    text-align: center;
+}
+
+.call-modal-info h3 {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 6px;
+    letter-spacing: -0.3px;
+}
+
+.call-modal-status {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+/* animated dots for "Calling..." */
+.calling-dots span {
+    display: inline-block;
+    animation: dotBounce 1.4s infinite;
+    letter-spacing: 2px;
+}
+
+@keyframes dotBounce {
+    0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
+    40%           { opacity: 1;   transform: translateY(-3px); }
+}
+
+/* ─── Modal action buttons ─── */
+.call-modal-actions {
+    display: flex;
+    gap: 32px;
+    margin-top: 8px;
+}
+
+.call-modal-actions.single {
+    justify-content: center;
+}
+
+.call-action-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    cursor: pointer;
+    background: none;
+    color: white;
+    transition: all 0.25s ease;
+}
+
+.call-action-btn > :first-child {
+    width: 62px;
+    height: 62px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    transition: all 0.25s ease;
+}
+
+.call-action-btn span {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.answer-call-btn > :first-child {
+    background: var(--success-color);
+    box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
+    animation: answerPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes answerPulse {
+    0%, 100% { box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4); }
+    50%       { box-shadow: 0 6px 30px rgba(16, 185, 129, 0.7); }
+}
+
+.reject-call-btn > :first-child {
+    background: var(--error-color);
+    box-shadow: 0 6px 20px rgba(239, 68, 68, 0.4);
+}
+
+.call-action-btn:hover > :first-child {
+    transform: scale(1.1);
+}
+
+/* ─── Active call screen ─── */
+
+/* Video container (full screen) */
+.call-video-container {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+}
+
+.remote-video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.local-video {
+    position: absolute;
+    bottom: 100px;
+    right: 16px;
+    width: 120px;
+    height: 160px;
+    border-radius: 14px;
+    object-fit: cover;
+    border: 2px solid rgba(255,255,255,0.3);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 10;
+}
+
+/* Audio call avatar */
+.active-call-avatar-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 80px;
+    margin-bottom: 24px;
+    z-index: 1;
+}
+
+.active-call-avatar {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 4px solid var(--primary-color);
+    position: relative;
+    z-index: 2;
+}
+
+.active-call-avatar-placeholder {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    background: #334155;
+    border: 4px solid var(--primary-color);
+    position: relative;
+    z-index: 2;
+}
+
+/* Animated wave rings */
+.active-call-wave {
+    position: absolute;
+    inset: -20px;
+    border-radius: 50%;
+    border: 3px solid rgba(99, 102, 241, 0.35);
+    animation: waveRing 2s ease-in-out infinite;
+}
+
+.active-call-wave::after {
+    content: '';
+    position: absolute;
+    inset: -20px;
+    border-radius: 50%;
+    border: 3px solid rgba(99, 102, 241, 0.2);
+    animation: waveRing 2s ease-in-out 0.7s infinite;
+}
+
+@keyframes waveRing {
+    0%   { transform: scale(1);   opacity: 0.8; }
+    100% { transform: scale(1.5); opacity: 0; }
+}
+
+/* Active call info */
+.active-call-info {
+    text-align: center;
+    z-index: 1;
+    margin-bottom: 16px;
+}
+
+.active-call-info h3 {
+    font-size: 26px;
+    font-weight: 700;
+    color: white;
+    margin: 0 0 8px;
+}
+
+.active-call-timer {
+    font-size: 18px;
+    color: rgba(255, 255, 255, 0.65);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 1px;
+    margin: 0;
+}
+
+/* Active call control buttons */
+.active-call-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 20px 24px 32px;
+    z-index: 1;
+    flex-wrap: wrap;
+}
+
+.active-call-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    border: none;
+    cursor: pointer;
+    background: none;
+    color: white;
+    transition: all 0.25s ease;
+    min-width: 60px;
+}
+
+.active-call-btn > svg {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    padding: 14px;
+    background: rgba(255, 255, 255, 0.12);
+    box-sizing: border-box;
+    transition: all 0.25s ease;
+}
+
+.active-call-btn span {
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255,255,255,0.7);
+}
+
+.active-call-btn:hover > svg {
+    background: rgba(255, 255, 255, 0.22);
+    transform: scale(1.08);
+}
+
+/* Active state (speaker ON) */
+.active-call-btn.active > svg {
+    background: var(--primary-color);
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.45);
+}
+
+/* Muted state */
+.active-call-btn.muted > svg {
+    background: rgba(239, 68, 68, 0.25);
+    color: #ef4444;
+}
+
+/* End call button — red pill */
+.end-call-btn > svg {
+    background: var(--error-color) !important;
+    box-shadow: 0 4px 18px rgba(239, 68, 68, 0.45);
+}
+
+.end-call-btn:hover > svg {
+    background: #dc2626 !important;
+    transform: scale(1.12);
+}
+
+/* ─── Responsive: xs (< 576px) ─── */
+@media (max-width: 575px) {
+    .call-modal {
+        padding: 28px 20px 22px;
+        gap: 14px;
+        border-radius: 22px;
+    }
+
+    .call-modal-avatar,
+    .call-modal-avatar img,
+    .call-modal-avatar-placeholder {
+        width: 80px;
+        height: 80px;
+    }
+
+    .call-modal-info h3 { font-size: 18px; }
+    .call-modal-status  { font-size: 13px; }
+
+    .call-modal-actions { gap: 24px; }
+
+    .call-action-btn > :first-child {
+        width: 54px;
+        height: 54px;
+        font-size: 20px;
+    }
+
+    /* Active call */
+    .active-call-avatar,
+    .active-call-avatar-placeholder {
+        width: 90px;
+        height: 90px;
+    }
+
+    .active-call-avatar-container { margin-top: 48px; }
+
+    .active-call-info h3    { font-size: 20px; }
+    .active-call-timer      { font-size: 15px; }
+
+    .active-call-controls {
+        gap: 16px;
+        padding: 16px 12px 24px;
+    }
+
+    .active-call-btn > svg {
+        width: 46px;
+        height: 46px;
+        font-size: 18px;
+        padding: 12px;
+    }
+
+    .active-call-btn span { font-size: 10px; }
+
+    .local-video {
+        width: 88px;
+        height: 120px;
+        bottom: 80px;
+        right: 10px;
+    }
+
+    .call-icon-btn {
+        width: 30px;
+        height: 30px;
+        font-size: 14px;
+    }
+}
+
+/* ─── Responsive: sm (576px – 767px) ─── */
+@media (min-width: 576px) and (max-width: 767px) {
+    .call-modal { width: min(380px, 90vw); }
+
+    .active-call-controls { gap: 20px; }
+
+    .local-video {
+        width: 100px;
+        height: 140px;
+    }
+}
+
+/* ─── Responsive: md (768px – 991px) ─── */
+@media (min-width: 768px) and (max-width: 991px) {
+    .call-modal { width: 400px; }
+
+    .active-call-controls { gap: 28px; }
+}
+
+/* ─── Responsive: lg (992px – 1199px) ─── */
+@media (min-width: 992px) and (max-width: 1199px) {
+    .call-icon-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 17px;
+    }
+}
+
+/* ─── Responsive: xl (1200px – 1399px) ─── */
+@media (min-width: 1200px) and (max-width: 1399px) {
+    .call-icon-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 17px;
+    }
+
+    .active-call-btn > svg {
+        width: 56px;
+        height: 56px;
+    }
+}
+
+/* ─── Responsive: xxl (≥ 1400px) ─── */
+@media (min-width: 1400px) {
+    .call-modal { width: 440px; }
+
+    .call-modal-info h3 { font-size: 24px; }
+
+    .call-action-btn > :first-child {
+        width: 68px;
+        height: 68px;
+        font-size: 26px;
+    }
+
+    .active-call-avatar,
+    .active-call-avatar-placeholder {
+        width: 140px;
+        height: 140px;
+    }
+
+    .active-call-info h3  { font-size: 30px; }
+    .active-call-timer    { font-size: 20px; }
+
+    .active-call-btn > svg {
+        width: 60px;
+        height: 60px;
+        font-size: 24px;
+        padding: 16px;
+    }
+
+    .active-call-controls { gap: 32px; }
+
+    .call-icon-btn {
+        width: 38px;
+        height: 38px;
+        font-size: 18px;
+    }
+
+    .local-video {
+        width: 150px;
+        height: 200px;
+    }
+}
+
+/* ─── Landscape mobile: keep controls visible ─── */
+@media (max-height: 600px) and (max-width: 768px) {
+    .active-call-avatar-container { margin-top: 20px; margin-bottom: 12px; }
+
+    .active-call-avatar,
+    .active-call-avatar-placeholder { width: 70px; height: 70px; }
+
+    .active-call-info { margin-bottom: 8px; }
+    .active-call-info h3 { font-size: 16px; }
+    .active-call-timer { font-size: 13px; }
+
+    .active-call-controls {
+        padding: 8px 12px 12px;
+        gap: 14px;
+    }
+
+    .active-call-btn > svg {
+        width: 40px;
+        height: 40px;
+        font-size: 16px;
+        padding: 10px;
+    }
+}

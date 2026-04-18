@@ -9,6 +9,7 @@ import {
     FiLock, FiUnlock, FiMenu, FiSmile, FiDownload,
     FiMoreHorizontal, FiMic, FiPlay, FiPause
 } from 'react-icons/fi';
+import { PiPlayCircleDuotone, PiPauseCircleDuotone } from "react-icons/pi";
 import EmojiPicker from '../components/EmojiPicker';
 import './Dashboard.css';
 
@@ -65,7 +66,7 @@ const AudioPlayer = ({ src, durationLabel, isSentByMe }) => {
                 onEnded={onEnded}
             />
             <button type="button" className="audio-play-btn" onClick={togglePlay}>
-                {isPlaying ? <FiPause /> : <FiPlay />}
+                {isPlaying ? <PiPauseCircleDuotone /> : <PiPlayCircleDuotone />}
             </button>
             <div className="audio-progress-container">
                 <input
