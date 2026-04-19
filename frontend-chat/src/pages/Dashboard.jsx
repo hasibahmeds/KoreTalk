@@ -200,17 +200,22 @@ const Dashboard = () => {
         callStateRef.current = callState;
     }, [callState]);
 
-    // Sync local video element with localStream
+    // Sync local video — fallback in case direct assignment missed the ref
     useEffect(() => {
         if (localVideoRef.current && localStream) {
-            localVideoRef.current.srcObject = localStream;
+            if (localVideoRef.current.srcObject !== localStream) {
+                localVideoRef.current.srcObject = localStream;
+            }
         }
     }, [localStream]);
 
-    // Sync remote video element with remoteStream
+    // Sync remote video — fallback in case direct assignment missed the ref
     useEffect(() => {
         if (remoteVideoRef.current && remoteStream) {
-            remoteVideoRef.current.srcObject = remoteStream;
+            if (remoteVideoRef.current.srcObject !== remoteStream) {
+                remoteVideoRef.current.srcObject = remoteStream;
+                remoteVideoRef.current.play().catch(() => { });
+            }
         }
     }, [remoteStream]);
 
@@ -1139,9 +1144,21 @@ const Dashboard = () => {
             }
         };
 
+        // ─── BUG FIX: assign srcObject directly here, not via React state → useEffect.
+        // The video element ref may be null when the useEffect runs because React hasn't
+        // committed the new render yet. Assigning here (synchronously in the event) is
+        // always safe and immediate. We ALSO call setRemoteStream so the UI reacts.
         pc.ontrack = (event) => {
-            if (event.streams && event.streams[0]) {
-                setRemoteStream(event.streams[0]);
+            const incomingStream = (event.streams && event.streams[0])
+                ? event.streams[0]
+                : new MediaStream([event.track]);
+
+            setRemoteStream(incomingStream);
+
+            // Direct DOM assignment — bypasses React rendering delay
+            if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = incomingStream;
+                remoteVideoRef.current.play().catch(() => { });
             }
         };
 
@@ -1183,6 +1200,16 @@ const Dashboard = () => {
                 uid: currentUser.uid,
                 name: dbUser?.displayName || currentUser.displayName || currentUser.email,
                 photo: dbUser?.photoURL || currentUser.photoURL || ''
+            });
+
+            // ─── BUG FIX: assign local stream directly after state update.
+            // After setCallState('calling') React schedules a re-render. The video element
+            // (<video ref={localVideoRef}>) only exists after that render commits. We use
+            // requestAnimationFrame to wait one paint cycle then assign srcObject.
+            requestAnimationFrame(() => {
+                if (localVideoRef.current && localStreamRef.current) {
+                    localVideoRef.current.srcObject = localStreamRef.current;
+                }
             });
 
             // 30-second no-answer timeout
@@ -1235,6 +1262,13 @@ const Dashboard = () => {
             setCallState('active');
             setActiveCallUser({ uid: callerId, name: callerName, photo: callerPhoto });
             setIncomingCallData(null);
+
+            // ─── BUG FIX: wait one paint cycle then assign local srcObject.
+            requestAnimationFrame(() => {
+                if (localVideoRef.current && localStreamRef.current) {
+                    localVideoRef.current.srcObject = localStreamRef.current;
+                }
+            });
 
             callDurationTimerRef.current = setInterval(() => {
                 setCallDuration(prev => prev + 1);
@@ -2093,17 +2127,20 @@ const Dashboard = () => {
             {/* ─── Active Call Overlay ─────────────────────────────────────────── */}
             {(callState === 'calling' || callState === 'active') && (
                 <div className="active-call-overlay" role="dialog" aria-label="Active call">
-                    {/* Remote video — full background */}
+
+                    {/* ── Remote video — always in DOM so ref is valid for srcObject ── */}
+                    {/* BUG FIX: removed display:none. The video is always rendered so
+                        remoteVideoRef.current is never null when ontrack fires.
+                        The waiting screen floats on top (z-index) when callState==='calling'. */}
                     <video
                         ref={remoteVideoRef}
                         className="remote-video"
                         autoPlay
                         playsInline
-                        style={{ display: callState === 'active' && remoteStream ? 'block' : 'none' }}
                     />
 
-                    {/* Waiting/Calling state centre content */}
-                    {callState === 'calling' && (
+                    {/* Waiting/Calling state — sits on top of the (black) remote video */}
+                    {(callState === 'calling' || !remoteStream) && (
                         <div className="call-waiting-screen">
                             <div className="call-waiting-avatar-wrap">
                                 {activeCallUser?.photo ? (
@@ -2116,19 +2153,21 @@ const Dashboard = () => {
                                 <div className="call-ringing-ring ring3" />
                             </div>
                             <p className="call-waiting-name">{activeCallUser?.name}</p>
-                            <p className="call-waiting-status">Calling…</p>
+                            <p className="call-waiting-status">
+                                {callState === 'calling' ? 'Calling…' : 'Connecting…'}
+                            </p>
                         </div>
                     )}
 
                     {/* Active call name + duration */}
-                    {callState === 'active' && (
+                    {callState === 'active' && remoteStream && (
                         <div className="call-info-bar">
                             <span className="call-info-name">{activeCallUser?.name}</span>
                             <span className="call-info-duration">{formatCallDuration(callDuration)}</span>
                         </div>
                     )}
 
-                    {/* Local (self) PiP video */}
+                    {/* Local (self) PiP video — always rendered so localVideoRef is valid */}
                     <div className="local-video-pip-wrapper">
                         <video
                             ref={localVideoRef}
