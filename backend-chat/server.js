@@ -120,64 +120,47 @@ io.on('connection', (socket) => {
         io.to(receiverId).emit('typing', { isTyping });
     });
 
-    // Video call events
-    socket.on('video_call_request', (data) => {
-        const { callerId, callerName, receiverId, chatId } = data;
-        io.to(receiverId).emit('incoming_video_call', {
-            callerId,
-            callerName,
-            receiverId,
-            chatId
-        });
+    // ─── WebRTC Signaling ────────────────────────────────────────────────────
+    // Caller → Callee: initiate a call with an SDP offer
+    socket.on('call:initiate', (data) => {
+        const { calleeId, offer, callerId, callerName, callerPhoto } = data;
+        console.log(`Call initiated: ${callerId} → ${calleeId}`);
+        io.to(calleeId).emit('call:incoming', { offer, callerId, callerName, callerPhoto });
     });
 
-    socket.on('video_call_accepted', (data) => {
-        const { callerId, receiverId } = data;
-        const startTime = Date.now(); // Synchronized timestamp for both users
-
-        // Send to caller with timestamp
-        io.to(callerId).emit('video_call_accepted', {
-            receiverId,
-            startTime
-        });
-
-        // Also send to receiver with same timestamp
-        io.to(receiverId).emit('video_call_accepted', {
-            callerId,
-            startTime
-        });
+    // Callee → Caller: accept with SDP answer
+    socket.on('call:accepted', (data) => {
+        const { callerId, calleeId, answer } = data;
+        console.log(`Call accepted: ${calleeId} → ${callerId}`);
+        io.to(callerId).emit('call:accepted', { answer, calleeId });
     });
 
-    socket.on('video_call_rejected', (data) => {
-        const { callerId, receiverId } = data;
-        io.to(callerId).emit('video_call_rejected', { receiverId });
+    // Callee → Caller: declined the call
+    socket.on('call:declined', (data) => {
+        const { callerId, calleeId } = data;
+        console.log(`Call declined: ${calleeId} → ${callerId}`);
+        io.to(callerId).emit('call:declined', { calleeId });
     });
 
-    socket.on('video_call_ended', (data) => {
-        const { callerId, receiverId } = data;
-        io.to(receiverId).emit('video_call_ended', { callerId });
+    // Both directions: relay ICE candidates
+    socket.on('call:ice-candidate', (data) => {
+        const { targetId, candidate } = data;
+        io.to(targetId).emit('call:ice-candidate', { candidate });
     });
 
-    socket.on('video_call_cancelled', (data) => {
-        const { callerId, receiverId } = data;
-        io.to(receiverId).emit('video_call_cancelled', { callerId });
+    // Either party: ended the call
+    socket.on('call:ended', (data) => {
+        const { targetId } = data;
+        console.log(`Call ended → ${targetId}`);
+        io.to(targetId).emit('call:ended');
     });
 
-    // WebRTC signaling
-    socket.on('offer', (data) => {
-        const { receiverId, offer } = data;
-        io.to(receiverId).emit('offer', { callerId: socket.id, offer });
+    // Callee is busy (already in a call)
+    socket.on('call:busy', (data) => {
+        const { callerId } = data;
+        io.to(callerId).emit('call:busy');
     });
-
-    socket.on('answer', (data) => {
-        const { callerId, answer } = data;
-        io.to(callerId).emit('answer', { answer });
-    });
-
-    socket.on('ice_candidate', (data) => {
-        const { receiverId, candidate } = data;
-        io.to(receiverId).emit('ice_candidate', { candidate });
-    });
+    // ─────────────────────────────────────────────────────────────────────────
 
     socket.on('disconnect', () => {
         console.log('User disconnected:', socket.id);

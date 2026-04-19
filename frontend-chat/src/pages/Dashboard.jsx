@@ -8,7 +8,8 @@ import {
     FiMessageCircle, FiUsers, FiSearch, FiLogOut, FiEdit,
     FiLock, FiUnlock, FiMenu, FiSmile, FiDownload,
     FiMoreHorizontal, FiMic, FiPlay, FiPause,
-    FiVideo, FiVideoOff, FiMicOff, FiVolume2, FiVolumeX, FiPhoneOff
+    FiVideo, FiVideoOff, FiMicOff, FiPhoneOff, FiPhone,
+    FiChevronDown, FiPhoneIncoming, FiPhoneCall
 } from 'react-icons/fi';
 import { PiPlayCircleDuotone, PiPauseCircleDuotone } from "react-icons/pi";
 import EmojiPicker from '../components/EmojiPicker';
@@ -93,7 +94,9 @@ const Dashboard = () => {
     const {
         sendMessage, sendDeletedMessage, sendEditedMessage,
         sendFriendRequest, sendTyping, onReceiveMessage,
-        onMessageDeleted, onFriendRequest, onMessageEdited, socket
+        onMessageDeleted, onFriendRequest, onMessageEdited, socket,
+        initiateCall, acceptCall, declineCall, sendIceCandidate, endCall, notifyBusy,
+        onIncomingCall, onCallAccepted, onCallDeclined, onIceCandidate, onCallEnded, onCallBusy
     } = useSocket();
 
     const [users, setUsers] = useState([]);
@@ -128,27 +131,31 @@ const Dashboard = () => {
         messages: false
     });
 
-    // Video call states
-    const [isInCall, setIsInCall] = useState(false);
-    const [isCalling, setIsCalling] = useState(false);
-    const [incomingCall, setIncomingCall] = useState(null);
-    const [localStream, setLocalStream] = useState(null);
-    const [remoteStream, setRemoteStream] = useState(null);
-    const [isVideoOn, setIsVideoOn] = useState(true);
-    const [isAudioOn, setIsAudioOn] = useState(true);
-    const [isSpeakerOn, setIsSpeakerOn] = useState(true);
-    const [showActionsDropdown, setShowActionsDropdown] = useState(false);
-    const [callDuration, setCallDuration] = useState(0);
-    const [callStartTime, setCallStartTime] = useState(null);
-    const callStartTimeRef = useRef(null); // Ref for synchronous access
-    const callDurationRef = useRef(null);
-    const localVideoRef = useRef(null);
-    const remoteVideoRef = useRef(null);
-    const peerConnectionRef = useRef(null);
-
     const messagesEndRef = useRef(null);
     const imageInputRef = useRef(null);
     const sidebarRef = useRef(null);
+
+    // ─── Call State ───────────────────────────────────────────────────────────
+    const [callState, setCallState] = useState('idle'); // idle | calling | incoming | active
+    const [incomingCallData, setIncomingCallData] = useState(null);
+    const [localStream, setLocalStream] = useState(null);
+    const [remoteStream, setRemoteStream] = useState(null);
+    const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+    const [isMicMuted, setIsMicMuted] = useState(false);
+    const [activeCallUser, setActiveCallUser] = useState(null);
+    const [callDuration, setCallDuration] = useState(0);
+    const [showHeaderDropdown, setShowHeaderDropdown] = useState(false);
+
+    // Call refs
+    const peerConnectionRef = useRef(null);
+    const localVideoRef = useRef(null);
+    const remoteVideoRef = useRef(null);
+    const localStreamRef = useRef(null);   // tracks stream for cleanup in closures
+    const iceCandidateQueueRef = useRef([]);
+    const callTimeoutRef = useRef(null);
+    const callDurationTimerRef = useRef(null);
+    const callStateRef = useRef('idle');   // mirror of callState for use inside closures
+    // ─────────────────────────────────────────────────────────────────────────
 
     // Toggle sidebar for mobile
     const toggleSidebar = () => {
@@ -181,26 +188,59 @@ const Dashboard = () => {
         };
     }, []);
 
-    // Close actions dropdown when clicking outside
-    useEffect(() => {
-        const handleClickOutside = (event) => {
-            if (showActionsDropdown &&
-                !event.target.closest('.actions-dropdown-toggle') &&
-                !event.target.closest('.actions-dropdown-menu')) {
-                setShowActionsDropdown(false);
-            }
-        };
-
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [showActionsDropdown]);
-
     // Close sidebar when chat is selected on mobile
     useEffect(() => {
         if (selectedChat && window.innerWidth <= 768) {
             setSidebarOpen(false);
         }
     }, [selectedChat]);
+
+    // Keep callStateRef in sync with callState
+    useEffect(() => {
+        callStateRef.current = callState;
+    }, [callState]);
+
+    // Sync local video element with localStream
+    useEffect(() => {
+        if (localVideoRef.current && localStream) {
+            localVideoRef.current.srcObject = localStream;
+        }
+    }, [localStream]);
+
+    // Sync remote video element with remoteStream
+    useEffect(() => {
+        if (remoteVideoRef.current && remoteStream) {
+            remoteVideoRef.current.srcObject = remoteStream;
+        }
+    }, [remoteStream]);
+
+    // Cleanup call on page unload
+    useEffect(() => {
+        const handleBeforeUnload = () => {
+            if (localStreamRef.current) {
+                localStreamRef.current.getTracks().forEach(t => t.stop());
+            }
+            if (peerConnectionRef.current) {
+                peerConnectionRef.current.close();
+            }
+            if (activeCallUser) {
+                endCall(activeCallUser.uid);
+            }
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [activeCallUser]);
+
+    // Close header dropdown when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (!e.target.closest('.header-dropdown-wrapper')) {
+                setShowHeaderDropdown(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
     // Fetch all users
     useEffect(() => {
@@ -266,41 +306,35 @@ const Dashboard = () => {
         setSelectedMessageIds([]);
     }, [selectedChat]);
 
-    // Socket listeners
+    // Socket listeners — chat
     useEffect(() => {
-        // Set up message received listener
         const handleReceiveMessage = (message) => {
             if (selectedChat && message.chatId === selectedChat._id) {
                 setMessages(prev => [...prev, message]);
             }
         };
 
-        // Set up message deleted listener
         const handleMessageDeleted = ({ messageId }) => {
             setMessages(prev => prev.map(msg =>
                 msg._id === messageId ? { ...msg, isDeleted: true, content: 'This message was deleted' } : msg
             ));
         };
 
-        // Set up message edited listener
         const handleMessageEdited = (message) => {
             setMessages(prev => prev.map(msg =>
                 msg._id === message._id ? message : msg
             ));
         };
 
-        // Set up friend request listener
         const handleFriendRequest = () => {
             fetchDbUser(currentUser.uid);
         };
 
-        // Register listeners
         onReceiveMessage(handleReceiveMessage);
         onMessageDeleted(handleMessageDeleted);
         onMessageEdited(handleMessageEdited);
         onFriendRequest(handleFriendRequest);
 
-        // Cleanup function to remove listeners when component unmounts or dependencies change
         return () => {
             if (socket) {
                 socket.off('receive_message', handleReceiveMessage);
@@ -310,6 +344,87 @@ const Dashboard = () => {
             }
         };
     }, [selectedChat, currentUser, onReceiveMessage, onMessageDeleted, onMessageEdited, onFriendRequest, fetchDbUser, socket]);
+
+    // Socket listeners — WebRTC calls (separate effect, stable deps)
+    useEffect(() => {
+        if (!socket) return;
+
+        const handleIncomingCall = (data) => {
+            if (callStateRef.current !== 'idle') {
+                // Already in a call — notify caller we're busy
+                if (socket) socket.emit('call:busy', { callerId: data.callerId });
+                return;
+            }
+            setIncomingCallData(data);
+            setCallState('incoming');
+        };
+
+        const handleCallAccepted = async (data) => {
+            const { answer } = data;
+            if (!peerConnectionRef.current) return;
+            try {
+                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+                // Flush queued ICE candidates
+                for (const candidate of iceCandidateQueueRef.current) {
+                    await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+                }
+                iceCandidateQueueRef.current = [];
+
+                setCallState('active');
+                if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
+
+                callDurationTimerRef.current = setInterval(() => {
+                    setCallDuration(prev => prev + 1);
+                }, 1000);
+            } catch (err) {
+                console.error('handleCallAccepted error:', err);
+                cleanupCall();
+            }
+        };
+
+        const handleCallDeclined = () => {
+            cleanupCall();
+            alert('Call was declined.');
+        };
+
+        const handleIceCandidate = async ({ candidate }) => {
+            if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
+                try {
+                    await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+                } catch (err) {
+                    console.error('addIceCandidate error:', err);
+                }
+            } else {
+                iceCandidateQueueRef.current.push(candidate);
+            }
+        };
+
+        const handleCallEnded = () => {
+            cleanupCall();
+        };
+
+        const handleCallBusy = () => {
+            cleanupCall();
+            alert('User is currently busy.');
+        };
+
+        onIncomingCall(handleIncomingCall);
+        onCallAccepted(handleCallAccepted);
+        onCallDeclined(handleCallDeclined);
+        onIceCandidate(handleIceCandidate);
+        onCallEnded(handleCallEnded);
+        onCallBusy(handleCallBusy);
+
+        return () => {
+            socket.off('call:incoming', handleIncomingCall);
+            socket.off('call:accepted', handleCallAccepted);
+            socket.off('call:declined', handleCallDeclined);
+            socket.off('call:ice-candidate', handleIceCandidate);
+            socket.off('call:ended', handleCallEnded);
+            socket.off('call:busy', handleCallBusy);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [socket]);
 
     // Scroll to bottom when messages change
     useEffect(() => {
@@ -336,8 +451,6 @@ const Dashboard = () => {
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
-                // Show "Unable to send" message when blocked
                 const errorMessage = {
                     _id: Date.now().toString(),
                     chatId: selectedChat._id,
@@ -512,7 +625,6 @@ const Dashboard = () => {
 
             const data = await response.json();
             if (data.success) {
-                // Refresh messages to show remaining messages
                 const messagesResponse = await fetch(
                     `https://koretalk007.onrender.com/api/messages/${selectedChat._id}`
                 );
@@ -595,7 +707,6 @@ const Dashboard = () => {
             const data = await response.json();
             if (data.success) {
                 fetchDbUser(currentUser.uid);
-                // Refresh chats
                 const chatResponse = await fetch(`https://koretalk007.onrender.com/api/chats/${currentUser.uid}`);
                 const chatData = await chatResponse.json();
                 setChats(chatData);
@@ -704,7 +815,6 @@ const Dashboard = () => {
     };
 
     // Download fullscreen image
-    // Download fullscreen image
     const handleDownloadImage = async () => {
         let imageUrl = '';
         if (fullscreenImage && typeof fullscreenImage === 'object') {
@@ -733,7 +843,6 @@ const Dashboard = () => {
             setShowImageMenu(false);
         } catch (error) {
             console.error('Error downloading image:', error);
-            // Fallback for CORS or other issues
             const link = document.createElement('a');
             link.href = imageUrl;
             link.target = '_blank';
@@ -755,7 +864,7 @@ const Dashboard = () => {
         if (selectedImages.length === 0 || !selectedChat) return;
 
         const imagesToSend = [...selectedImages];
-        handleCancelImage(); // Clear selection immediately to close modal
+        handleCancelImage();
 
         for (const item of imagesToSend) {
             const base64 = item.preview.split(',')[1];
@@ -793,7 +902,7 @@ const Dashboard = () => {
         }
     };
 
-    // Handle image upload (legacy - not used anymore)
+    // Handle image upload (legacy)
     const handleImageUpload = async (e) => {
         const file = e.target.files[0];
         if (!file || !selectedChat) return;
@@ -846,20 +955,17 @@ const Dashboard = () => {
         } else {
             setNewMessage(prev => prev + emoji);
         }
-        // Don't close picker automatically to allow multiple emojis
     };
 
     // Handle backspace in emoji picker
     const handleBackspace = () => {
         const deleteLastCharacter = (str) => {
             if (!str) return str;
-            // Use Intl.Segmenter to correctly handle complex Emojis (surrogate pairs, ZWJ sequences, flags, etc.)
             if (typeof Intl !== 'undefined' && Intl.Segmenter) {
                 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
                 const segments = Array.from(segmenter.segment(str)).map(s => s.segment);
                 return segments.slice(0, -1).join('');
             }
-            // Fallback
             const arr = [...str];
             return arr.slice(0, -1).join('');
         };
@@ -886,426 +992,7 @@ const Dashboard = () => {
         return chat.participants.find(p => p.uid !== currentUser.uid);
     };
 
-    // WebRTC peer connection setup
-    const createPeerConnection = () => {
-        const configuration = {
-            iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
-        };
-        const pc = new RTCPeerConnection(configuration);
-        peerConnectionRef.current = pc;
-
-        // Add local stream tracks to peer connection
-        if (localStream) {
-            localStream.getTracks().forEach(track => {
-                pc.addTrack(track, localStream);
-            });
-        }
-
-        // Handle remote stream
-        pc.ontrack = (event) => {
-            const remoteStream = event.streams[0];
-            setRemoteStream(remoteStream);
-            if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = remoteStream;
-            }
-        };
-
-        // ICE candidate handling
-        pc.onicecandidate = (event) => {
-            if (event.candidate && socket) {
-                const otherUser = getOtherUser(selectedChat);
-                if (otherUser) {
-                    socket.emit('ice_candidate', {
-                        receiverId: otherUser.uid,
-                        candidate: event.candidate
-                    });
-                }
-            }
-        };
-
-        return pc;
-    };
-
-    // Video call functions
-    const startVideoCall = async () => {
-        if (!selectedChat) return;
-        const otherUser = getOtherUser(selectedChat);
-        if (!otherUser) return;
-
-        setIsCalling(true);
-        // Emit call event to other user via socket
-        if (socket) {
-            socket.emit('video_call_request', {
-                callerId: currentUser.uid,
-                callerName: currentUser.displayName || currentUser.email,
-                receiverId: otherUser.uid,
-                chatId: selectedChat._id
-            });
-        }
-
-        // Start local stream
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            setLocalStream(stream);
-            if (localVideoRef.current) {
-                localVideoRef.current.srcObject = stream;
-            }
-            // Create peer connection as caller
-            const pc = createPeerConnection();
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            // Send offer to receiver
-            if (socket) {
-                socket.emit('offer', {
-                    receiverId: otherUser.uid,
-                    offer: pc.localDescription
-                });
-            }
-        } catch (err) {
-            console.error('Error accessing media devices:', err);
-            alert('Could not access camera/microphone. Please check permissions.');
-            setIsCalling(false);
-            // Ensure video element is cleared
-            if (localVideoRef.current) {
-                localVideoRef.current.srcObject = null;
-            }
-        }
-    };
-
-    const acceptCall = async () => {
-        if (!incomingCall) return;
-        setIsInCall(true);
-        setIncomingCall(null);
-        // Start local stream for callee
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            setLocalStream(stream);
-            if (localVideoRef.current) {
-                localVideoRef.current.srcObject = stream;
-            }
-            // Create peer connection as callee
-            const pc = createPeerConnection();
-            // Notify caller that call is accepted
-            if (socket) {
-                socket.emit('video_call_accepted', {
-                    callerId: incomingCall.callerId,
-                    receiverId: currentUser.uid
-                });
-            }
-            // Timer will be started when we receive video_call_accepted event from server
-            // with synchronized timestamp
-        } catch (err) {
-            console.error('Error accessing media devices:', err);
-            alert('Could not access camera/microphone.');
-            // Reset states and clear video element
-            setIsInCall(false);
-            if (localVideoRef.current) {
-                localVideoRef.current.srcObject = null;
-            }
-        }
-    };
-
-    const rejectCall = () => {
-        if (!incomingCall) return;
-        if (socket) {
-            socket.emit('video_call_rejected', {
-                callerId: incomingCall.callerId,
-                receiverId: currentUser.uid
-            });
-        }
-        setIncomingCall(null);
-    };
-
-    const stopLocalStream = () => {
-        if (localStream) {
-            localStream.getTracks().forEach(track => track.stop());
-            // Clear video element srcObject to immediately release camera indicator
-            if (localVideoRef.current) {
-                localVideoRef.current.srcObject = null;
-            }
-            setLocalStream(null);
-        }
-    };
-
-    const stopRemoteStream = () => {
-        if (remoteStream) {
-            remoteStream.getTracks().forEach(track => track.stop());
-            // Clear remote video element srcObject
-            if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = null;
-            }
-            setRemoteStream(null);
-        }
-    };
-
-    const endCall = () => {
-        // Close peer connection
-        if (peerConnectionRef.current) {
-            peerConnectionRef.current.close();
-            peerConnectionRef.current = null;
-        }
-        // Stop local and remote streams
-        stopLocalStream();
-        stopRemoteStream();
-        // Reset states
-        setIsInCall(false);
-        setIsCalling(false);
-        setCallDuration(0);
-        setCallStartTime(null);
-        callStartTimeRef.current = null;
-        if (callDurationRef.current) {
-            clearTimeout(callDurationRef.current);
-            callDurationRef.current = null;
-        }
-        // Notify other user
-        if (socket && selectedChat) {
-            const otherUser = getOtherUser(selectedChat);
-            if (otherUser) {
-                socket.emit('video_call_ended', {
-                    callerId: currentUser.uid,
-                    receiverId: otherUser.uid
-                });
-            }
-        }
-    };
-
-    const cancelCall = () => {
-        // Stop local stream
-        stopLocalStream();
-
-        // Reset calling state
-        setIsCalling(false);
-
-        // Notify other user that call is cancelled
-        if (socket && selectedChat) {
-            const otherUser = getOtherUser(selectedChat);
-            if (otherUser) {
-                socket.emit('video_call_cancelled', {
-                    callerId: currentUser.uid,
-                    receiverId: otherUser.uid
-                });
-            }
-        }
-
-        // Clear any peer connection
-        if (peerConnectionRef.current) {
-            peerConnectionRef.current.close();
-            peerConnectionRef.current = null;
-        }
-    };
-
-    const toggleVideo = () => {
-        if (localStream) {
-            const videoTrack = localStream.getVideoTracks()[0];
-            if (videoTrack) {
-                videoTrack.enabled = !videoTrack.enabled;
-                setIsVideoOn(videoTrack.enabled);
-            }
-        }
-    };
-
-    const toggleAudio = () => {
-        if (localStream) {
-            const audioTrack = localStream.getAudioTracks()[0];
-            if (audioTrack) {
-                audioTrack.enabled = !audioTrack.enabled;
-                setIsAudioOn(audioTrack.enabled);
-            }
-        }
-    };
-
-    const toggleSpeaker = () => {
-        setIsSpeakerOn(!isSpeakerOn);
-        // Implement speaker toggle logic (optional)
-        if (remoteVideoRef.current) {
-            remoteVideoRef.current.muted = !isSpeakerOn;
-        }
-    };
-
-    const startCallTimer = (startTime = null) => {
-        // Clear any existing timer
-        if (callDurationRef.current) {
-            console.log('Clearing existing timer');
-            clearTimeout(callDurationRef.current);
-            callDurationRef.current = null;
-        }
-
-        // Use provided startTime or current time
-        const actualStartTime = startTime || Date.now();
-        console.log('Starting call timer with startTime:', actualStartTime, 'current time:', Date.now(), 'difference:', Date.now() - actualStartTime, 'ms');
-        setCallStartTime(actualStartTime);
-        callStartTimeRef.current = actualStartTime;
-
-        // Update function that runs every second
-        const updateTimer = () => {
-            const elapsedSeconds = Math.max(0, Math.floor((Date.now() - actualStartTime) / 1000));
-            console.log('Call timer update:', elapsedSeconds, 'seconds', 'actualStartTime:', actualStartTime);
-            setCallDuration(elapsedSeconds);
-
-            // Schedule next update
-            callDurationRef.current = setTimeout(updateTimer, 1000);
-        };
-
-        // Calculate initial duration
-        const initialDuration = Math.max(0, Math.floor((Date.now() - actualStartTime) / 1000));
-        console.log('Initial duration:', initialDuration, 'seconds');
-        setCallDuration(initialDuration);
-
-        // Start the recursive timer
-        callDurationRef.current = setTimeout(updateTimer, 1000);
-        console.log('Timer started with timeout ID:', callDurationRef.current);
-    };
-
-    const formatCallDuration = () => {
-        let seconds = callDuration;
-
-        // Calculate current elapsed time from start time (use ref for synchronous access)
-        const startTime = callStartTimeRef.current;
-        console.log('formatCallDuration: callStartTimeRef.current =', startTime, 'callDuration=', callDuration);
-        if (startTime) {
-            seconds = Math.floor((Date.now() - startTime) / 1000);
-            console.log('Calculated seconds from startTime:', seconds);
-        }
-
-        const minutes = Math.floor(seconds / 60);
-        const secs = seconds % 60;
-        const formatted = `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        console.log('formatCallDuration result:', formatted);
-        return formatted;
-    };
-
-    // Socket listeners for video call
-    useEffect(() => {
-        if (!socket) return;
-
-        const handleIncomingCall = (data) => {
-            setIncomingCall(data);
-        };
-
-        const handleCallAccepted = (data) => {
-            console.log('handleCallAccepted called with data:', data);
-            setIsCalling(false);
-            setIsInCall(true);
-            // Use server timestamp for synchronized timer
-            const startTime = data.startTime || Date.now();
-            console.log('Using startTime:', startTime);
-            startCallTimer(startTime);
-        };
-
-        const handleCallRejected = (data) => {
-            setIsCalling(false);
-            stopLocalStream();
-            alert('Call rejected by user.');
-        };
-
-        const handleCallEnded = (data) => {
-            endCall();
-            alert('Call ended by other user.');
-        };
-
-        const handleCallCancelled = (data) => {
-            // If we have incoming call notification, remove it
-            if (incomingCall) {
-                setIncomingCall(null);
-            }
-            // If we're in calling state, stop local stream
-            if (isCalling) {
-                setIsCalling(false);
-                stopLocalStream();
-            }
-            alert('Call cancelled by other user.');
-        };
-
-        const handleOffer = async (data) => {
-            // If we are the receiver, create answer
-            if (!peerConnectionRef.current) {
-                const pc = createPeerConnection();
-                await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-                const answer = await pc.createAnswer();
-                await pc.setLocalDescription(answer);
-                socket.emit('answer', {
-                    callerId: data.callerId,
-                    answer: pc.localDescription
-                });
-            }
-        };
-
-        const handleAnswer = async (data) => {
-            if (peerConnectionRef.current && peerConnectionRef.current.signalingState !== 'stable') {
-                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
-            }
-        };
-
-        const handleIceCandidate = async (data) => {
-            if (peerConnectionRef.current) {
-                try {
-                    await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
-                } catch (err) {
-                    console.error('Error adding ICE candidate:', err);
-                }
-            }
-        };
-
-        socket.on('incoming_video_call', handleIncomingCall);
-        socket.on('video_call_accepted', handleCallAccepted);
-        socket.on('video_call_rejected', handleCallRejected);
-        socket.on('video_call_ended', handleCallEnded);
-        socket.on('video_call_cancelled', handleCallCancelled);
-        socket.on('offer', handleOffer);
-        socket.on('answer', handleAnswer);
-        socket.on('ice_candidate', handleIceCandidate);
-
-        return () => {
-            socket.off('incoming_video_call', handleIncomingCall);
-            socket.off('video_call_accepted', handleCallAccepted);
-            socket.off('video_call_rejected', handleCallRejected);
-            socket.off('video_call_ended', handleCallEnded);
-            socket.off('video_call_cancelled', handleCallCancelled);
-            socket.off('offer', handleOffer);
-            socket.off('answer', handleAnswer);
-            socket.off('ice_candidate', handleIceCandidate);
-        };
-    }, [socket]);
-
-    // Cleanup on component unmount - stop all media streams
-    useEffect(() => {
-        return () => {
-            // Stop local stream
-            if (localStream) {
-                localStream.getTracks().forEach(track => track.stop());
-                // Clear video element srcObject
-                if (localVideoRef.current) {
-                    localVideoRef.current.srcObject = null;
-                }
-            }
-            // Stop remote stream
-            if (remoteStream) {
-                remoteStream.getTracks().forEach(track => track.stop());
-                // Clear remote video element srcObject
-                if (remoteVideoRef.current) {
-                    remoteVideoRef.current.srcObject = null;
-                }
-            }
-            // Close peer connection
-            if (peerConnectionRef.current) {
-                peerConnectionRef.current.close();
-            }
-            // Clear call timer
-            if (callDurationRef.current) {
-                clearTimeout(callDurationRef.current);
-                callDurationRef.current = null;
-            }
-            // Reset timer state
-            setCallDuration(0);
-            setCallStartTime(null);
-            callStartTimeRef.current = null;
-        };
-    }, [localStream, remoteStream]);
-
-    // Filter users - show all users (friends and non-friends)
+    // Filter users
     const filteredUsers = users.filter(user => {
         const name = (user.displayName || user.email).toLowerCase();
         return name.includes(searchTerm.toLowerCase());
@@ -1338,11 +1025,9 @@ const Dashboard = () => {
             const data = await response.json();
             if (data.success) {
                 fetchDbUser(currentUser.uid);
-                // Refresh chats to remove the chat with this friend
                 const chatResponse = await fetch(`https://koretalk007.onrender.com/api/chats/${currentUser.uid}`);
                 const chatData = await chatResponse.json();
                 setChats(chatData);
-                // Clear selected chat if it was with this friend
                 if (selectedChat) {
                     const otherUser = selectedChat.participants.find(p => p.uid !== currentUser.uid);
                     if (otherUser && otherUser.uid === friendUid) {
@@ -1381,21 +1066,18 @@ const Dashboard = () => {
         const isGroup = item.type === 'image-group';
         const mainMsg = isGroup ? item.messages[0] : item;
 
-        // Only allow selecting user's own non-deleted messages
         if (!mainMsg.isDeleted && mainMsg.sender?.uid === currentUser.uid) {
             const itemIds = isGroup ? item.messages.map(m => m._id) : [item._id];
 
             setSelectedMessageIds(prev => {
                 const allExists = itemIds.every(id => prev.includes(id));
                 if (allExists) {
-                    // Remove all from selection
                     return prev.filter(id => !itemIds.includes(id));
                 } else {
-                    // Add all to selection (unique)
                     return [...new Set([...prev, ...itemIds])];
                 }
             });
-            setEditingMessage(null); // Cancel any ongoing edit locally
+            setEditingMessage(null);
             setEditContent('');
         }
     };
@@ -1406,6 +1088,202 @@ const Dashboard = () => {
 
     const selectedMessages = messages.filter(m => selectedMessageIds.includes(m._id));
     const firstSelectedMessage = selectedMessages[0];
+
+    // ─── WebRTC Call Functions ────────────────────────────────────────────────
+    const STUN_SERVERS = {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+        ]
+    };
+
+    const formatCallDuration = (secs) => {
+        const h = Math.floor(secs / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        const s = secs % 60;
+        if (h > 0) {
+            return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    };
+
+    const cleanupCall = () => {
+        if (localStreamRef.current) {
+            localStreamRef.current.getTracks().forEach(t => t.stop());
+            localStreamRef.current = null;
+        }
+        if (peerConnectionRef.current) {
+            peerConnectionRef.current.close();
+            peerConnectionRef.current = null;
+        }
+        iceCandidateQueueRef.current = [];
+        if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
+        if (callDurationTimerRef.current) { clearInterval(callDurationTimerRef.current); callDurationTimerRef.current = null; }
+        setCallState('idle');
+        setIncomingCallData(null);
+        setLocalStream(null);
+        setRemoteStream(null);
+        setIsVideoEnabled(true);
+        setIsMicMuted(false);
+        setActiveCallUser(null);
+        setCallDuration(0);
+    };
+
+    const initPeerConnection = (targetUserId) => {
+        const pc = new RTCPeerConnection(STUN_SERVERS);
+
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                sendIceCandidate(targetUserId, event.candidate);
+            }
+        };
+
+        pc.ontrack = (event) => {
+            if (event.streams && event.streams[0]) {
+                setRemoteStream(event.streams[0]);
+            }
+        };
+
+        pc.onconnectionstatechange = () => {
+            const state = pc.connectionState;
+            if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+                cleanupCall();
+            }
+        };
+
+        return pc;
+    };
+
+    const startCall = async () => {
+        if (!selectedChat || callStateRef.current !== 'idle') return;
+        const otherUser = getOtherUser(selectedChat);
+        if (!otherUser) return;
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localStreamRef.current = stream;
+            setLocalStream(stream);
+
+            const pc = initPeerConnection(otherUser.uid);
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            peerConnectionRef.current = pc;
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            setCallState('calling');
+            setActiveCallUser({
+                uid: otherUser.uid,
+                name: otherUser.displayName || otherUser.email,
+                photo: otherUser.photoURL || ''
+            });
+
+            initiateCall(otherUser.uid, offer, {
+                uid: currentUser.uid,
+                name: dbUser?.displayName || currentUser.displayName || currentUser.email,
+                photo: dbUser?.photoURL || currentUser.photoURL || ''
+            });
+
+            // 30-second no-answer timeout
+            callTimeoutRef.current = setTimeout(() => {
+                if (callStateRef.current === 'calling') {
+                    endCall(otherUser.uid);
+                    cleanupCall();
+                    alert('No answer. The call timed out.');
+                }
+            }, 30000);
+        } catch (err) {
+            console.error('startCall error:', err);
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                alert('Camera/microphone access denied.\nPlease allow permissions in your browser and try again.');
+            } else if (err.name === 'NotFoundError') {
+                alert('No camera or microphone found.\nPlease connect a device and try again.');
+            } else {
+                alert('Could not start call. Please check your camera and microphone.');
+            }
+            cleanupCall();
+        }
+    };
+
+    const handleAcceptCall = async () => {
+        if (!incomingCallData) return;
+        const { callerId, callerName, callerPhoto, offer } = incomingCallData;
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localStreamRef.current = stream;
+            setLocalStream(stream);
+
+            const pc = initPeerConnection(callerId);
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            peerConnectionRef.current = pc;
+
+            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+            // Flush queued ICE candidates
+            for (const candidate of iceCandidateQueueRef.current) {
+                await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+            }
+            iceCandidateQueueRef.current = [];
+
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            acceptCall(callerId, currentUser.uid, answer);
+
+            setCallState('active');
+            setActiveCallUser({ uid: callerId, name: callerName, photo: callerPhoto });
+            setIncomingCallData(null);
+
+            callDurationTimerRef.current = setInterval(() => {
+                setCallDuration(prev => prev + 1);
+            }, 1000);
+        } catch (err) {
+            console.error('handleAcceptCall error:', err);
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                alert('Camera/microphone access denied.\nPlease allow permissions and try again.');
+            } else {
+                alert('Could not connect the call. Please check your camera and microphone.');
+            }
+            declineCall(callerId, currentUser.uid);
+            cleanupCall();
+        }
+    };
+
+    const handleDeclineCall = () => {
+        if (!incomingCallData) return;
+        declineCall(incomingCallData.callerId, currentUser.uid);
+        cleanupCall();
+    };
+
+    const handleEndCall = () => {
+        if (activeCallUser) {
+            endCall(activeCallUser.uid);
+        }
+        cleanupCall();
+    };
+
+    const toggleVideo = () => {
+        if (localStreamRef.current) {
+            const videoTrack = localStreamRef.current.getVideoTracks()[0];
+            if (videoTrack) {
+                videoTrack.enabled = !videoTrack.enabled;
+                setIsVideoEnabled(videoTrack.enabled);
+            }
+        }
+    };
+
+    const toggleMic = () => {
+        if (localStreamRef.current) {
+            const audioTrack = localStreamRef.current.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                setIsMicMuted(!audioTrack.enabled);
+            }
+        }
+    };
+    // ─────────────────────────────────────────────────────────────────────────
 
     return (
         <div className="dashboard">
@@ -1608,7 +1486,6 @@ const Dashboard = () => {
                                     />
                                     <div className="chat-details">
                                         <span className="chat-name">{otherUser?.displayName || otherUser?.email}</span>
-                                        {/* <span className="last-message">{chat.lastMessage || 'No messages yet'}</span> */}
                                     </div>
                                 </div>
                             );
@@ -1670,99 +1547,87 @@ const Dashboard = () => {
                                         style={{ display: getOtherUser(selectedChat)?.photoURL ? 'none' : 'flex' }}
                                     />
                                     <span className="chat-name">{getOtherUser(selectedChat)?.displayName || getOtherUser(selectedChat)?.email}</span>
-                                    <div className="chat-header-actions">
-                                        {/* Desktop buttons - visible on lg and above */}
-                                        <div className="actions-desktop">
-                                            <button
-                                                className="video-call-btn"
-                                                onClick={startVideoCall}
-                                                title="Start video call"
-                                            >
-                                                <FiVideo /> <span className="action-text">Call</span>
-                                            </button>
-                                            <button
-                                                className="remove-messages-btn"
-                                                onClick={handleRemoveAllMyMessages}
-                                                title="Remove all my messages"
-                                            >
-                                                <FiTrash2 /> <span className="action-text">Remove</span>
-                                            </button>
-                                            {isBlocked ? (
-                                                <button
-                                                    className="unblock-btn"
-                                                    onClick={handleUnblockUser}
-                                                    title="Unblock user"
-                                                >
-                                                    <FiUnlock /> <span className="action-text">Unblock</span>
-                                                </button>
-                                            ) : (
-                                                <button
-                                                    className="block-btn"
-                                                    onClick={handleBlockUser}
-                                                    title="Block user"
-                                                >
-                                                    <FiLock /> <span className="action-text">Block</span>
-                                                </button>
-                                            )}
-                                        </div>
 
-                                        {/* Mobile dropdown - visible on md and below */}
-                                        <div className="actions-mobile">
+                                    {/* ── Desktop Actions (≥992px) ───────────────── */}
+                                    <div className="chat-header-actions desktop-actions">
+                                        <button
+                                            className="remove-messages-btn"
+                                            onClick={handleRemoveAllMyMessages}
+                                            title="Remove all my messages"
+                                        >
+                                            <FiTrash2 /> <span className="action-text">Remove My Messages</span>
+                                        </button>
+                                        {isBlocked ? (
                                             <button
-                                                className="actions-dropdown-toggle"
-                                                onClick={() => setShowActionsDropdown(!showActionsDropdown)}
-                                                title="More actions"
+                                                className="unblock-btn"
+                                                onClick={handleUnblockUser}
+                                                title="Unblock user"
                                             >
-                                                <FiMoreVertical />
+                                                <FiUnlock /> <span className="action-text">Unblock</span>
                                             </button>
-                                            {showActionsDropdown && (
-                                                <div className="actions-dropdown-menu">
+                                        ) : (
+                                            <button
+                                                className="block-btn"
+                                                onClick={handleBlockUser}
+                                                title="Block user"
+                                            >
+                                                <FiLock /> <span className="action-text">Block</span>
+                                            </button>
+                                        )}
+                                        <button
+                                            id="call-btn-desktop"
+                                            className="call-btn"
+                                            onClick={startCall}
+                                            title="Start video call"
+                                            disabled={callState !== 'idle'}
+                                        >
+                                            <FiVideo /> <span className="action-text">Call</span>
+                                        </button>
+                                    </div>
+
+                                    {/* ── Mobile/Tablet Dropdown (<992px) ───────── */}
+                                    <div className="chat-header-actions mobile-actions header-dropdown-wrapper">
+                                        <button
+                                            id="header-dropdown-btn"
+                                            className="header-dropdown-btn"
+                                            onClick={() => setShowHeaderDropdown(prev => !prev)}
+                                            title="More options"
+                                        >
+                                            <FiMoreVertical />
+                                        </button>
+                                        {showHeaderDropdown && (
+                                            <div className="header-dropdown-menu">
+                                                <button
+                                                    className="header-dropdown-item"
+                                                    onClick={() => { handleRemoveAllMyMessages(); setShowHeaderDropdown(false); }}
+                                                >
+                                                    <FiTrash2 /> Remove My Messages
+                                                </button>
+                                                {isBlocked ? (
                                                     <button
-                                                        className="dropdown-item video-call-btn"
-                                                        onClick={() => {
-                                                            startVideoCall();
-                                                            setShowActionsDropdown(false);
-                                                        }}
-                                                        title="Start video call"
+                                                        className="header-dropdown-item"
+                                                        onClick={() => { handleUnblockUser(); setShowHeaderDropdown(false); }}
                                                     >
-                                                        <FiVideo /> <span>Call</span>
+                                                        <FiUnlock /> Unblock User
                                                     </button>
+                                                ) : (
                                                     <button
-                                                        className="dropdown-item remove-messages-btn"
-                                                        onClick={() => {
-                                                            handleRemoveAllMyMessages();
-                                                            setShowActionsDropdown(false);
-                                                        }}
-                                                        title="Remove all my messages"
+                                                        className="header-dropdown-item"
+                                                        onClick={() => { handleBlockUser(); setShowHeaderDropdown(false); }}
                                                     >
-                                                        <FiTrash2 /> <span>Remove</span>
+                                                        <FiLock /> Block User
                                                     </button>
-                                                    {isBlocked ? (
-                                                        <button
-                                                            className="dropdown-item unblock-btn"
-                                                            onClick={() => {
-                                                                handleUnblockUser();
-                                                                setShowActionsDropdown(false);
-                                                            }}
-                                                            title="Unblock user"
-                                                        >
-                                                            <FiUnlock /> <span>Unblock</span>
-                                                        </button>
-                                                    ) : (
-                                                        <button
-                                                            className="dropdown-item block-btn"
-                                                            onClick={() => {
-                                                                handleBlockUser();
-                                                                setShowActionsDropdown(false);
-                                                            }}
-                                                            title="Block user"
-                                                        >
-                                                            <FiLock /> <span>Block</span>
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
+                                                )}
+                                                <button
+                                                    id="call-btn-mobile"
+                                                    className="header-dropdown-item call-dropdown-item"
+                                                    onClick={() => { startCall(); setShowHeaderDropdown(false); }}
+                                                    disabled={callState !== 'idle'}
+                                                >
+                                                    <FiVideo /> Video Call
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 </>
                             )}
@@ -1942,9 +1807,6 @@ const Dashboard = () => {
                                 </div>
                             ) : (
                                 <>
-                                    {/* Image Preview */}
-                                    {/* Image Preview removed from here and moved to a modal overlay below */}
-
                                     {selectedImages.length === 0 && (
                                         <div className="unified-input-area">
                                             {isRecording ? (
@@ -2183,83 +2045,43 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Video Call Modal */}
-            {(isInCall || isCalling) && (
-                <div className="video-call-overlay">
-                    <div className="video-call-container">
-                        <div className="video-call-header">
-                            <span className="call-status">
-                                {isCalling ? 'Calling...' : `In Call - ${formatCallDuration()}`}
-                            </span>
-                            <div className="call-header-buttons">
-                                {isCalling && (
-                                    <button
-                                        className="cancel-call-btn"
-                                        onClick={cancelCall}
-                                        title="Cancel Call"
-                                    >
-                                        Cancel
-                                    </button>
-                                )}
-                                <button className="close-call-btn" onClick={endCall} title="End Call">
-                                    <FiPhoneOff />
-                                </button>
-                            </div>
-                        </div>
-                        <div className="video-grid">
-                            {/* Remote video (other user) */}
-                            <div className="video-remote">
-                                <video
-                                    ref={remoteVideoRef}
-                                    autoPlay
-                                    playsInline
-                                    className="remote-video"
+            {/* ─── Incoming Call Notification ─────────────────────────────────── */}
+            {callState === 'incoming' && incomingCallData && (
+                <div className="incoming-call-overlay" role="dialog" aria-label="Incoming call notification">
+                    <div className="incoming-call-card">
+                        <div className="incoming-call-pulse" />
+                        <div className="incoming-call-avatar-wrap">
+                            {incomingCallData.callerPhoto ? (
+                                <img
+                                    src={incomingCallData.callerPhoto}
+                                    alt={incomingCallData.callerName}
+                                    className="incoming-call-avatar"
+                                    onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
                                 />
-                                {!remoteStream && (
-                                    <div className="video-placeholder">
-                                        <FiVideoOff />
-                                        <p>Waiting for other user...</p>
-                                    </div>
-                                )}
-                            </div>
-                            {/* Local video (self) */}
-                            <div className="video-local">
-                                <video
-                                    ref={localVideoRef}
-                                    autoPlay
-                                    playsInline
-                                    muted
-                                    className="local-video"
-                                />
-                                <div className="local-video-label">You</div>
-                            </div>
+                            ) : null}
+                            <div
+                                className="incoming-call-avatar incoming-call-avatar-placeholder"
+                                style={{ display: incomingCallData.callerPhoto ? 'none' : 'flex' }}
+                            />
                         </div>
-                        <div className="video-controls">
+                        <div className="incoming-call-info">
+                            <span className="incoming-call-label">Incoming Video Call</span>
+                            <span className="incoming-call-name">{incomingCallData.callerName}</span>
+                        </div>
+                        <div className="incoming-call-actions">
                             <button
-                                className={`control-btn ${isVideoOn ? 'active' : 'inactive'}`}
-                                onClick={toggleVideo}
-                                title={isVideoOn ? 'Turn off video' : 'Turn on video'}
+                                id="accept-call-btn"
+                                className="call-action-btn accept-call-btn"
+                                onClick={handleAcceptCall}
+                                title="Accept call"
                             >
-                                {isVideoOn ? <FiVideo /> : <FiVideoOff />}
+                                <FiPhone />
                             </button>
                             <button
-                                className={`control-btn ${isAudioOn ? 'active' : 'inactive'}`}
-                                onClick={toggleAudio}
-                                title={isAudioOn ? 'Mute microphone' : 'Unmute microphone'}
-                            >
-                                {isAudioOn ? <FiMic /> : <FiMicOff />}
-                            </button>
-                            <button
-                                className={`control-btn ${isSpeakerOn ? 'active' : 'inactive'}`}
-                                onClick={toggleSpeaker}
-                                title={isSpeakerOn ? 'Turn off speaker' : 'Turn on speaker'}
-                            >
-                                {isSpeakerOn ? <FiVolume2 /> : <FiVolumeX />}
-                            </button>
-                            <button
-                                className="control-btn end-call-btn"
-                                onClick={endCall}
-                                title="End Call"
+                                id="decline-call-btn"
+                                className="call-action-btn decline-call-btn"
+                                onClick={handleDeclineCall}
+                                title="Decline call"
                             >
                                 <FiPhoneOff />
                             </button>
@@ -2268,33 +2090,94 @@ const Dashboard = () => {
                 </div>
             )}
 
-            {/* Incoming Call Notification */}
-            {incomingCall && (
-                <div className="incoming-call-overlay">
-                    <div className="incoming-call-modal">
-                        <div className="incoming-call-header">
-                            <FiVideo className="call-icon" />
-                            <h3>Incoming Video Call</h3>
-                        </div>
-                        <div className="incoming-call-body">
-                            <p>
-                                <strong>{incomingCall.callerName}</strong> is calling you.
-                            </p>
-                            <div className="incoming-call-actions">
-                                <button
-                                    className="accept-call-btn"
-                                    onClick={acceptCall}
-                                >
-                                    <FiVideo /> Accept
-                                </button>
-                                <button
-                                    className="reject-call-btn"
-                                    onClick={rejectCall}
-                                >
-                                    <FiPhoneOff /> Decline
-                                </button>
+            {/* ─── Active Call Overlay ─────────────────────────────────────────── */}
+            {(callState === 'calling' || callState === 'active') && (
+                <div className="active-call-overlay" role="dialog" aria-label="Active call">
+                    {/* Remote video — full background */}
+                    <video
+                        ref={remoteVideoRef}
+                        className="remote-video"
+                        autoPlay
+                        playsInline
+                        style={{ display: callState === 'active' && remoteStream ? 'block' : 'none' }}
+                    />
+
+                    {/* Waiting/Calling state centre content */}
+                    {callState === 'calling' && (
+                        <div className="call-waiting-screen">
+                            <div className="call-waiting-avatar-wrap">
+                                {activeCallUser?.photo ? (
+                                    <img src={activeCallUser.photo} alt={activeCallUser.name} className="call-waiting-avatar" />
+                                ) : (
+                                    <div className="call-waiting-avatar call-waiting-avatar-placeholder" />
+                                )}
+                                <div className="call-ringing-ring ring1" />
+                                <div className="call-ringing-ring ring2" />
+                                <div className="call-ringing-ring ring3" />
                             </div>
+                            <p className="call-waiting-name">{activeCallUser?.name}</p>
+                            <p className="call-waiting-status">Calling…</p>
                         </div>
+                    )}
+
+                    {/* Active call name + duration */}
+                    {callState === 'active' && (
+                        <div className="call-info-bar">
+                            <span className="call-info-name">{activeCallUser?.name}</span>
+                            <span className="call-info-duration">{formatCallDuration(callDuration)}</span>
+                        </div>
+                    )}
+
+                    {/* Local (self) PiP video */}
+                    <div className="local-video-pip-wrapper">
+                        <video
+                            ref={localVideoRef}
+                            className="local-video-pip"
+                            autoPlay
+                            playsInline
+                            muted
+                        />
+                        {!isVideoEnabled && (
+                            <div className="local-video-off-overlay">
+                                <FiVideoOff />
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Controls */}
+                    <div className="call-controls">
+                        {/* Mute toggle */}
+                        <button
+                            id="toggle-mic-btn"
+                            className={`call-control-btn ${isMicMuted ? 'toggled-off' : ''}`}
+                            onClick={toggleMic}
+                            title={isMicMuted ? 'Unmute' : 'Mute'}
+                        >
+                            {isMicMuted ? <FiMicOff /> : <FiMic />}
+                            <span className="call-btn-label">{isMicMuted ? 'Unmute' : 'Mute'}</span>
+                        </button>
+
+                        {/* End call */}
+                        <button
+                            id="end-call-btn"
+                            className="call-control-btn end-call-btn"
+                            onClick={handleEndCall}
+                            title="End call"
+                        >
+                            <FiPhoneOff />
+                            <span className="call-btn-label">End Call</span>
+                        </button>
+
+                        {/* Video toggle */}
+                        <button
+                            id="toggle-video-btn"
+                            className={`call-control-btn ${!isVideoEnabled ? 'toggled-off' : ''}`}
+                            onClick={toggleVideo}
+                            title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
+                        >
+                            {isVideoEnabled ? <FiVideo /> : <FiVideoOff />}
+                            <span className="call-btn-label">{isVideoEnabled ? 'Camera' : 'No Camera'}</span>
+                        </button>
                     </div>
                 </div>
             )}

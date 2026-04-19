@@ -8,43 +8,41 @@ export const useSocket = () => useContext(SocketContext);
 
 export const SocketProvider = ({ children }) => {
     const socketRef = useRef(null);
-    const [socket, setSocket] = useState(null);
     const [isConnected, setIsConnected] = useState(false);
     const { currentUser, dbUser } = useAuth();
 
     useEffect(() => {
         // Initialize socket connection
-        const socketInstance = io('https://koretalk007.onrender.com');
-        socketRef.current = socketInstance;
-        setSocket(socketInstance);
+        socketRef.current = io('https://koretalk007.onrender.com');
 
-        socketInstance.on('connect', () => {
+        socketRef.current.on('connect', () => {
             console.log('Connected to socket server');
             setIsConnected(true);
         });
 
-        socketInstance.on('disconnect', () => {
+        socketRef.current.on('disconnect', () => {
             console.log('Disconnected from socket server');
             setIsConnected(false);
         });
 
         return () => {
-            if (socketInstance) {
-                socketInstance.disconnect();
+            if (socketRef.current) {
+                socketRef.current.disconnect();
             }
         };
     }, []);
 
     // Join user's room when logged in
     useEffect(() => {
-        if (socket && currentUser) {
-            socket.emit('join_chat', currentUser.uid);
+        if (socketRef.current && currentUser) {
+            socketRef.current.emit('join_chat', currentUser.uid);
         }
-    }, [socket, currentUser]);
+    }, [currentUser]);
 
+    // ─── Chat helpers ─────────────────────────────────────────────────────────
     const sendMessage = (receiverId, message) => {
-        if (socket) {
-            socket.emit('send_message', {
+        if (socketRef.current) {
+            socketRef.current.emit('send_message', {
                 receiverId,
                 message,
                 senderId: currentUser.uid
@@ -53,80 +51,161 @@ export const SocketProvider = ({ children }) => {
     };
 
     const sendEditedMessage = (receiverId, message) => {
-        if (socket) {
-            socket.emit('message_edited', { receiverId, message });
+        if (socketRef.current) {
+            socketRef.current.emit('message_edited', { receiverId, message });
         }
     };
 
     const sendDeletedMessage = (receiverId, messageId) => {
-        if (socket) {
-            socket.emit('message_deleted', { receiverId, messageId });
+        if (socketRef.current) {
+            socketRef.current.emit('message_deleted', { receiverId, messageId });
         }
     };
 
     const sendFriendRequest = (receiverId, request) => {
-        if (socket) {
-            socket.emit('friend_request', { receiverId, request });
+        if (socketRef.current) {
+            socketRef.current.emit('friend_request', { receiverId, request });
         }
     };
 
     const sendFriendRequestAccepted = (receiverId, user) => {
-        if (socket) {
-            socket.emit('friend_request_accepted', { receiverId, user });
+        if (socketRef.current) {
+            socketRef.current.emit('friend_request_accepted', { receiverId, user });
         }
     };
 
     const sendTyping = (receiverId, isTyping) => {
-        if (socket) {
-            socket.emit('typing', { receiverId, isTyping });
+        if (socketRef.current) {
+            socketRef.current.emit('typing', { receiverId, isTyping });
         }
     };
 
     const onReceiveMessage = (callback) => {
-        if (socket) {
-            socket.on('receive_message', callback);
+        if (socketRef.current) {
+            socketRef.current.on('receive_message', callback);
         }
     };
 
     const onMessageEdited = (callback) => {
-        if (socket) {
-            socket.on('message_edited', callback);
+        if (socketRef.current) {
+            socketRef.current.on('message_edited', callback);
         }
     };
 
     const onMessageDeleted = (callback) => {
-        if (socket) {
-            socket.on('message_deleted', callback);
+        if (socketRef.current) {
+            socketRef.current.on('message_deleted', callback);
         }
     };
 
     const onFriendRequest = (callback) => {
-        if (socket) {
-            socket.on('friend_request', callback);
+        if (socketRef.current) {
+            socketRef.current.on('friend_request', callback);
         }
     };
 
     const onFriendRequestAccepted = (callback) => {
-        if (socket) {
-            socket.on('friend_request_accepted', callback);
+        if (socketRef.current) {
+            socketRef.current.on('friend_request_accepted', callback);
         }
     };
 
     const onTyping = (callback) => {
-        if (socket) {
-            socket.on('typing', callback);
+        if (socketRef.current) {
+            socketRef.current.on('typing', callback);
         }
     };
 
     const removeAllListeners = () => {
-        if (socket) {
-            socket.removeAllListeners();
+        if (socketRef.current) {
+            socketRef.current.removeAllListeners();
         }
     };
 
+    // ─── WebRTC Call helpers ──────────────────────────────────────────────────
+    const initiateCall = (calleeId, offer, callerInfo) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:initiate', {
+                calleeId,
+                offer,
+                callerId: callerInfo.uid,
+                callerName: callerInfo.name,
+                callerPhoto: callerInfo.photo
+            });
+        }
+    };
+
+    const acceptCall = (callerId, calleeId, answer) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:accepted', { callerId, calleeId, answer });
+        }
+    };
+
+    const declineCall = (callerId, calleeId) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:declined', { callerId, calleeId });
+        }
+    };
+
+    const sendIceCandidate = (targetId, candidate) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:ice-candidate', { targetId, candidate });
+        }
+    };
+
+    const endCall = (targetId) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:ended', { targetId });
+        }
+    };
+
+    const notifyBusy = (callerId) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:busy', { callerId });
+        }
+    };
+
+    const onIncomingCall = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:incoming', callback);
+        }
+    };
+
+    const onCallAccepted = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:accepted', callback);
+        }
+    };
+
+    const onCallDeclined = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:declined', callback);
+        }
+    };
+
+    const onIceCandidate = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:ice-candidate', callback);
+        }
+    };
+
+    const onCallEnded = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:ended', callback);
+        }
+    };
+
+    const onCallBusy = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:busy', callback);
+        }
+    };
+    // ─────────────────────────────────────────────────────────────────────────
+
     const value = {
-        socket,
+        socket: socketRef.current,
         isConnected,
+        // Chat
         sendMessage,
         sendEditedMessage,
         sendDeletedMessage,
@@ -139,7 +218,20 @@ export const SocketProvider = ({ children }) => {
         onFriendRequest,
         onFriendRequestAccepted,
         onTyping,
-        removeAllListeners
+        removeAllListeners,
+        // Calls
+        initiateCall,
+        acceptCall,
+        declineCall,
+        sendIceCandidate,
+        endCall,
+        notifyBusy,
+        onIncomingCall,
+        onCallAccepted,
+        onCallDeclined,
+        onIceCandidate,
+        onCallEnded,
+        onCallBusy,
     };
 
     return (
