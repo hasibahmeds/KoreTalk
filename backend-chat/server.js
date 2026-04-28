@@ -61,7 +61,7 @@ const server = http.createServer(app);
 // Socket.io setup
 const io = new Server(server, {
     cors: {
-        origin: "http://localhost:5173",
+        origin: "https://getknoktalk.onrender.com",
         methods: ["GET", "POST"]
     }
 });
@@ -289,7 +289,7 @@ io.on('connection', (socket) => {
             const call = activeCalls.get(userId);
             if (call) {
                 const otherId = (call.callerId === userId) ? call.calleeId : call.callerId;
-                
+
                 if (call.status === 'active' && call.startTime) {
                     const durationSeconds = Math.floor((Date.now() - call.startTime) / 1000);
                     const durationStr = formatDuration(durationSeconds);
