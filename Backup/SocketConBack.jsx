@@ -39,6 +39,7 @@ export const SocketProvider = ({ children }) => {
         }
     }, [currentUser]);
 
+    // ─── Chat helpers ─────────────────────────────────────────────────────────
     const sendMessage = (receiverId, message) => {
         if (socketRef.current) {
             socketRef.current.emit('send_message', {
@@ -121,9 +122,91 @@ export const SocketProvider = ({ children }) => {
         }
     };
 
+    // ─── WebRTC Call helpers ──────────────────────────────────────────────────
+    const initiateCall = (calleeId, offer, callerInfo, chatId) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:initiate', {
+                calleeId,
+                offer,
+                callerId: callerInfo.uid,
+                callerName: callerInfo.name,
+                callerPhoto: callerInfo.photo,
+                chatId
+            });
+        }
+    };
+
+    const acceptCall = (callerId, calleeId, answer) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:accepted', { callerId, calleeId, answer });
+        }
+    };
+
+    const declineCall = (callerId, calleeId) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:declined', { callerId, calleeId });
+        }
+    };
+
+    const sendIceCandidate = (targetId, candidate) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:ice-candidate', { targetId, candidate });
+        }
+    };
+
+    const endCall = (targetId, senderId) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:ended', { targetId, senderId });
+        }
+    };
+
+    const notifyBusy = (callerId, calleeId) => {
+        if (socketRef.current) {
+            socketRef.current.emit('call:busy', { callerId, calleeId });
+        }
+    };
+
+    const onIncomingCall = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:incoming', callback);
+        }
+    };
+
+    const onCallAccepted = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:accepted', callback);
+        }
+    };
+
+    const onCallDeclined = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:declined', callback);
+        }
+    };
+
+    const onIceCandidate = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:ice-candidate', callback);
+        }
+    };
+
+    const onCallEnded = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:ended', callback);
+        }
+    };
+
+    const onCallBusy = (callback) => {
+        if (socketRef.current) {
+            socketRef.current.on('call:busy', callback);
+        }
+    };
+    // ─────────────────────────────────────────────────────────────────────────
+
     const value = {
         socket: socketRef.current,
         isConnected,
+        // Chat
         sendMessage,
         sendEditedMessage,
         sendDeletedMessage,
@@ -136,7 +219,20 @@ export const SocketProvider = ({ children }) => {
         onFriendRequest,
         onFriendRequestAccepted,
         onTyping,
-        removeAllListeners
+        removeAllListeners,
+        // Calls
+        initiateCall,
+        acceptCall,
+        declineCall,
+        sendIceCandidate,
+        endCall,
+        notifyBusy,
+        onIncomingCall,
+        onCallAccepted,
+        onCallDeclined,
+        onIceCandidate,
+        onCallEnded,
+        onCallBusy,
     };
 
     return (

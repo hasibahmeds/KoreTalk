@@ -13,7 +13,7 @@ export const SocketProvider = ({ children }) => {
 
     useEffect(() => {
         // Initialize socket connection
-        socketRef.current = io('https://koretalk007.onrender.com');
+        socketRef.current = io('http://localhost:5000');
 
         socketRef.current.on('connect', () => {
             console.log('Connected to socket server');
@@ -123,14 +123,15 @@ export const SocketProvider = ({ children }) => {
     };
 
     // ─── WebRTC Call helpers ──────────────────────────────────────────────────
-    const initiateCall = (calleeId, offer, callerInfo) => {
+    const initiateCall = (calleeId, offer, callerInfo, chatId) => {
         if (socketRef.current) {
             socketRef.current.emit('call:initiate', {
                 calleeId,
                 offer,
                 callerId: callerInfo.uid,
                 callerName: callerInfo.name,
-                callerPhoto: callerInfo.photo
+                callerPhoto: callerInfo.photo,
+                chatId
             });
         }
     };
@@ -153,15 +154,15 @@ export const SocketProvider = ({ children }) => {
         }
     };
 
-    const endCall = (targetId) => {
+    const endCall = (targetId, senderId) => {
         if (socketRef.current) {
-            socketRef.current.emit('call:ended', { targetId });
+            socketRef.current.emit('call:ended', { targetId, senderId });
         }
     };
 
-    const notifyBusy = (callerId) => {
+    const notifyBusy = (callerId, calleeId) => {
         if (socketRef.current) {
-            socketRef.current.emit('call:busy', { callerId });
+            socketRef.current.emit('call:busy', { callerId, calleeId });
         }
     };
 

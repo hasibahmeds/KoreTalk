@@ -175,12 +175,16 @@
 }
 
 .tg-emoji-body::-webkit-scrollbar {
-    width: 5px;
+    width: 6px;
 }
 
 .tg-emoji-body::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.15);
     border-radius: 10px;
+}
+
+.tg-emoji-body::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.25);
 }
 
 .tg-emoji-section {
@@ -266,7 +270,8 @@
 .backspace-btn:hover,
 .send-emoji-btn:hover {
     color: var(--tg-text-main);
-    transform: scale(1.15);
+    /* transform: scale(1.15); */
+    transform: scale(1.06);
     background: transparent;
 }
 

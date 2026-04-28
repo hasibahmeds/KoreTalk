@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useSocket } from '../context/SocketContext';
@@ -7,7 +6,9 @@ import {
     FiTrash2, FiCheck, FiX, FiUserPlus,
     FiMessageCircle, FiUsers, FiSearch, FiLogOut, FiEdit,
     FiLock, FiUnlock, FiMenu, FiSmile, FiDownload,
-    FiMoreHorizontal, FiMic, FiPlay, FiPause
+    FiMoreHorizontal, FiMic, FiPlay, FiPause,
+    FiVideo, FiVideoOff, FiMicOff, FiPhoneOff, FiPhone,
+    FiChevronDown, FiChevronUp, FiPhoneIncoming, FiPhoneCall, FiCornerUpLeft
 } from 'react-icons/fi';
 import { PiPlayCircleDuotone, PiPauseCircleDuotone } from "react-icons/pi";
 import EmojiPicker from '../components/EmojiPicker';
@@ -77,6 +78,7 @@ const AudioPlayer = ({ src, durationLabel, isSentByMe }) => {
                     value={currentTime}
                     onChange={handleSeek}
                     className="audio-slider"
+                    style={{ '--progress': `${(currentTime / (duration || 1)) * 100}%` }}
                 />
             </div>
             <span className="audio-duration">
@@ -92,11 +94,15 @@ const Dashboard = () => {
     const {
         sendMessage, sendDeletedMessage, sendEditedMessage,
         sendFriendRequest, sendTyping, onReceiveMessage,
-        onMessageDeleted, onFriendRequest, onMessageEdited, socket
+        onMessageDeleted, onFriendRequest, onMessageEdited, socket,
+        initiateCall, acceptCall, declineCall, sendIceCandidate, endCall, notifyBusy,
+        onIncomingCall, onCallAccepted, onCallDeclined, onIceCandidate, onCallEnded, onCallBusy
     } = useSocket();
 
     const [users, setUsers] = useState([]);
     const [chats, setChats] = useState([]);
+    const [unreadChats, setUnreadChats] = useState(new Set());
+    const [isUnreadLoaded, setIsUnreadLoaded] = useState(false);
     const [selectedChat, setSelectedChat] = useState(null);
     const [messages, setMessages] = useState([]);
     const [newMessage, setNewMessage] = useState('');
@@ -104,10 +110,17 @@ const Dashboard = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [editingMessage, setEditingMessage] = useState(null);
+    const [replyingToMessage, setReplyingToMessage] = useState(null);
     const [editContent, setEditContent] = useState('');
     const [fullscreenImage, setFullscreenImage] = useState(null);
     const [selectedImages, setSelectedImages] = useState([]); // Array of { file, preview }
     const [previewFullscreen, setPreviewFullscreen] = useState(null); // Now stores the preview URL itself
+
+    // Search state
+    const [isSearching, setIsSearching] = useState(false);
+    const [chatSearchTerm, setChatSearchTerm] = useState('');
+    const [searchResults, setSearchResults] = useState([]);
+    const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
 
     // Audio recording states
     const [isRecording, setIsRecording] = useState(false);
@@ -128,8 +141,55 @@ const Dashboard = () => {
     });
 
     const messagesEndRef = useRef(null);
+    const searchInputRef = useRef(null);
     const imageInputRef = useRef(null);
     const sidebarRef = useRef(null);
+
+    // ─── Call State ───────────────────────────────────────────────────────────
+    const [callState, setCallState] = useState('idle'); // idle | calling | incoming | active
+    const [incomingCallData, setIncomingCallData] = useState(null);
+    const [localStream, setLocalStream] = useState(null);
+    const [remoteStream, setRemoteStream] = useState(null);
+    const [isVideoEnabled, setIsVideoEnabled] = useState(true);
+    const [isMicMuted, setIsMicMuted] = useState(false);
+    const [activeCallUser, setActiveCallUser] = useState(null);
+    const [callDuration, setCallDuration] = useState(0);
+    const [showHeaderDropdown, setShowHeaderDropdown] = useState(false);
+    const [showSelectionDropdown, setShowSelectionDropdown] = useState(false);
+
+    // Call refs
+    const peerConnectionRef = useRef(null);
+    const localVideoRef = useRef(null);
+    const remoteVideoRef = useRef(null);
+    const localStreamRef = useRef(null);   // tracks stream for cleanup in closures
+    const iceCandidateQueueRef = useRef([]);
+    const callTimeoutRef = useRef(null);
+    const callDurationTimerRef = useRef(null);
+    const callStateRef = useRef('idle');   // mirror of callState for use inside closures
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Load unread chats from localStorage safely
+    useEffect(() => {
+        if (currentUser?.uid) {
+            try {
+                const saved = localStorage.getItem(`unreadChats_${currentUser.uid}`);
+                if (saved) {
+                    setUnreadChats(new Set(JSON.parse(saved)));
+                }
+            } catch (e) {
+                console.error("Error loading unread chats", e);
+            }
+            setIsUnreadLoaded(true);
+        }
+    }, [currentUser?.uid]);
+
+    // Save unread chats to localStorage only after initial load
+    useEffect(() => {
+        if (currentUser?.uid && isUnreadLoaded) {
+            localStorage.setItem(`unreadChats_${currentUser.uid}`, JSON.stringify([...unreadChats]));
+        }
+    }, [unreadChats, currentUser?.uid, isUnreadLoaded]);
+
 
     // Toggle sidebar for mobile
     const toggleSidebar = () => {
@@ -168,6 +228,60 @@ const Dashboard = () => {
             setSidebarOpen(false);
         }
     }, [selectedChat]);
+
+    // Keep callStateRef in sync with callState
+    useEffect(() => {
+        callStateRef.current = callState;
+    }, [callState]);
+
+    // Sync local video — re-runs when callState changes (overlay mounts/unmounts)
+    useEffect(() => {
+        if (localVideoRef.current && localStream) {
+            if (localVideoRef.current.srcObject !== localStream) {
+                localVideoRef.current.srcObject = localStream;
+            }
+        }
+    }, [localStream, callState]);
+
+    // Sync remote video — re-runs when callState changes so it catches the case
+    // where ontrack fired BEFORE the overlay rendered (callee flow).
+    useEffect(() => {
+        if (remoteVideoRef.current && remoteStream) {
+            if (remoteVideoRef.current.srcObject !== remoteStream) {
+                remoteVideoRef.current.srcObject = remoteStream;
+                remoteVideoRef.current.play().catch(() => { });
+            }
+        }
+    }, [remoteStream, callState]);
+
+    // Cleanup call on page unload
+    useEffect(() => {
+        const handleBeforeUnload = () => {
+            if (localStreamRef.current) {
+                localStreamRef.current.getTracks().forEach(t => t.stop());
+            }
+            if (peerConnectionRef.current) {
+                peerConnectionRef.current.close();
+            }
+            if (activeCallUser) {
+                endCall(activeCallUser.uid);
+            }
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [activeCallUser]);
+
+    // Close header dropdown when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (!e.target.closest('.header-dropdown-wrapper')) {
+                setShowHeaderDropdown(false);
+                setShowSelectionDropdown(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
     // Fetch all users
     useEffect(() => {
@@ -231,43 +345,43 @@ const Dashboard = () => {
         };
         fetchMessages();
         setSelectedMessageIds([]);
+        setReplyingToMessage(null);
+        setIsSearching(false);
+        setChatSearchTerm('');
+        setSearchResults([]);
     }, [selectedChat]);
 
-    // Socket listeners
+    // Socket listeners — chat
     useEffect(() => {
-        // Set up message received listener
         const handleReceiveMessage = (message) => {
             if (selectedChat && message.chatId === selectedChat._id) {
                 setMessages(prev => [...prev, message]);
+            } else {
+                setUnreadChats(prev => new Set(prev).add(message.chatId));
             }
         };
 
-        // Set up message deleted listener
         const handleMessageDeleted = ({ messageId }) => {
             setMessages(prev => prev.map(msg =>
                 msg._id === messageId ? { ...msg, isDeleted: true, content: 'This message was deleted' } : msg
             ));
         };
 
-        // Set up message edited listener
         const handleMessageEdited = (message) => {
             setMessages(prev => prev.map(msg =>
                 msg._id === message._id ? message : msg
             ));
         };
 
-        // Set up friend request listener
         const handleFriendRequest = () => {
             fetchDbUser(currentUser.uid);
         };
 
-        // Register listeners
         onReceiveMessage(handleReceiveMessage);
         onMessageDeleted(handleMessageDeleted);
         onMessageEdited(handleMessageEdited);
         onFriendRequest(handleFriendRequest);
 
-        // Cleanup function to remove listeners when component unmounts or dependencies change
         return () => {
             if (socket) {
                 socket.off('receive_message', handleReceiveMessage);
@@ -277,6 +391,87 @@ const Dashboard = () => {
             }
         };
     }, [selectedChat, currentUser, onReceiveMessage, onMessageDeleted, onMessageEdited, onFriendRequest, fetchDbUser, socket]);
+
+    // Socket listeners — WebRTC calls (separate effect, stable deps)
+    useEffect(() => {
+        if (!socket) return;
+
+        const handleIncomingCall = (data) => {
+            if (callStateRef.current !== 'idle') {
+                // Already in a call — notify caller we're busy
+                if (socket) socket.emit('call:busy', { callerId: data.callerId, calleeId: currentUser.uid, chatId: data.chatId });
+                return;
+            }
+            setIncomingCallData(data);
+            setCallState('incoming');
+        };
+
+        const handleCallAccepted = async (data) => {
+            const { answer } = data;
+            if (!peerConnectionRef.current) return;
+            try {
+                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+                // Flush queued ICE candidates
+                for (const candidate of iceCandidateQueueRef.current) {
+                    await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+                }
+                iceCandidateQueueRef.current = [];
+
+                setCallState('active');
+                if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
+
+                callDurationTimerRef.current = setInterval(() => {
+                    setCallDuration(prev => prev + 1);
+                }, 1000);
+            } catch (err) {
+                console.error('handleCallAccepted error:', err);
+                cleanupCall();
+            }
+        };
+
+        const handleCallDeclined = () => {
+            cleanupCall();
+            alert('Call was declined.');
+        };
+
+        const handleIceCandidate = async ({ candidate }) => {
+            if (peerConnectionRef.current && peerConnectionRef.current.remoteDescription) {
+                try {
+                    await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+                } catch (err) {
+                    console.error('addIceCandidate error:', err);
+                }
+            } else {
+                iceCandidateQueueRef.current.push(candidate);
+            }
+        };
+
+        const handleCallEnded = () => {
+            cleanupCall();
+        };
+
+        const handleCallBusy = () => {
+            cleanupCall();
+            alert('User is currently busy.');
+        };
+
+        onIncomingCall(handleIncomingCall);
+        onCallAccepted(handleCallAccepted);
+        onCallDeclined(handleCallDeclined);
+        onIceCandidate(handleIceCandidate);
+        onCallEnded(handleCallEnded);
+        onCallBusy(handleCallBusy);
+
+        return () => {
+            socket.off('call:incoming', handleIncomingCall);
+            socket.off('call:accepted', handleCallAccepted);
+            socket.off('call:declined', handleCallDeclined);
+            socket.off('call:ice-candidate', handleIceCandidate);
+            socket.off('call:ended', handleCallEnded);
+            socket.off('call:busy', handleCallBusy);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [socket]);
 
     // Scroll to bottom when messages change
     useEffect(() => {
@@ -298,13 +493,12 @@ const Dashboard = () => {
                     chatId: selectedChat._id,
                     senderUid: currentUser.uid,
                     content: newMessage,
-                    messageType: 'text'
+                    messageType: 'text',
+                    replyTo: replyingToMessage ? replyingToMessage._id : null
                 })
             });
 
             if (!response.ok) {
-                const errorData = await response.json();
-                // Show "Unable to send" message when blocked
                 const errorMessage = {
                     _id: Date.now().toString(),
                     chatId: selectedChat._id,
@@ -323,6 +517,7 @@ const Dashboard = () => {
             setMessages(prev => [...prev, message]);
             sendMessage(receiver.uid, message);
             setNewMessage('');
+            setReplyingToMessage(null);
         } catch (error) {
             console.error('Error sending message:', error);
         }
@@ -403,7 +598,8 @@ const Dashboard = () => {
                         senderUid: currentUser.uid,
                         content: formatTime(durationInSeconds),
                         messageType: 'audio',
-                        fileUrl: base64Audio
+                        fileUrl: base64Audio,
+                        replyTo: replyingToMessage ? replyingToMessage._id : null
                     })
                 });
 
@@ -424,6 +620,7 @@ const Dashboard = () => {
                 const message = await response.json();
                 setMessages(prev => [...prev, message]);
                 sendMessage(receiver.uid, message);
+                setReplyingToMessage(null);
             } catch (error) {
                 console.error('Error sending audio message:', error);
             }
@@ -479,7 +676,6 @@ const Dashboard = () => {
 
             const data = await response.json();
             if (data.success) {
-                // Refresh messages to show remaining messages
                 const messagesResponse = await fetch(
                     `http://localhost:5000/api/messages/${selectedChat._id}`
                 );
@@ -562,7 +758,6 @@ const Dashboard = () => {
             const data = await response.json();
             if (data.success) {
                 fetchDbUser(currentUser.uid);
-                // Refresh chats
                 const chatResponse = await fetch(`http://localhost:5000/api/chats/${currentUser.uid}`);
                 const chatData = await chatResponse.json();
                 setChats(chatData);
@@ -605,19 +800,20 @@ const Dashboard = () => {
         const otherUser = getOtherUser(selectedChat);
         if (!otherUser) return;
 
-        try {
-            await fetch('http://localhost:5000/api/users/block', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    userUid: currentUser.uid,
-                    blockedUid: otherUser.uid
-                })
-            });
-            setIsBlocked(true);
-            alert(`You blocked ${otherUser.displayName || otherUser.email}`);
-        } catch (error) {
-            console.error('Error blocking user:', error);
+        if (window.confirm('Are you want to block?')) {
+            try {
+                await fetch('http://localhost:5000/api/users/block', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userUid: currentUser.uid,
+                        blockedUid: otherUser.uid
+                    })
+                });
+                setIsBlocked(true);
+            } catch (error) {
+                console.error('Error blocking user:', error);
+            }
         }
     };
 
@@ -626,19 +822,20 @@ const Dashboard = () => {
         const otherUser = getOtherUser(selectedChat);
         if (!otherUser) return;
 
-        try {
-            await fetch('http://localhost:5000/api/users/unblock', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    userUid: currentUser.uid,
-                    blockedUid: otherUser.uid
-                })
-            });
-            setIsBlocked(false);
-            alert(`You unblocked ${otherUser.displayName || otherUser.email}`);
-        } catch (error) {
-            console.error('Error unblocking user:', error);
+        if (window.confirm('Are you want to Unblock?')) {
+            try {
+                await fetch('http://localhost:5000/api/users/unblock', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userUid: currentUser.uid,
+                        blockedUid: otherUser.uid
+                    })
+                });
+                setIsBlocked(false);
+            } catch (error) {
+                console.error('Error unblocking user:', error);
+            }
         }
     };
 
@@ -671,7 +868,6 @@ const Dashboard = () => {
     };
 
     // Download fullscreen image
-    // Download fullscreen image
     const handleDownloadImage = async () => {
         let imageUrl = '';
         if (fullscreenImage && typeof fullscreenImage === 'object') {
@@ -700,7 +896,6 @@ const Dashboard = () => {
             setShowImageMenu(false);
         } catch (error) {
             console.error('Error downloading image:', error);
-            // Fallback for CORS or other issues
             const link = document.createElement('a');
             link.href = imageUrl;
             link.target = '_blank';
@@ -722,7 +917,7 @@ const Dashboard = () => {
         if (selectedImages.length === 0 || !selectedChat) return;
 
         const imagesToSend = [...selectedImages];
-        handleCancelImage(); // Clear selection immediately to close modal
+        handleCancelImage();
 
         for (const item of imagesToSend) {
             const base64 = item.preview.split(',')[1];
@@ -746,7 +941,8 @@ const Dashboard = () => {
                             senderUid: currentUser.uid,
                             content: item.file.name,
                             messageType: 'image',
-                            fileUrl: data.url
+                            fileUrl: data.url,
+                            replyTo: replyingToMessage ? replyingToMessage._id : null
                         })
                     });
 
@@ -758,9 +954,10 @@ const Dashboard = () => {
                 console.error('Error uploading image:', error);
             }
         }
+        setReplyingToMessage(null);
     };
 
-    // Handle image upload (legacy - not used anymore)
+    // Handle image upload (legacy)
     const handleImageUpload = async (e) => {
         const file = e.target.files[0];
         if (!file || !selectedChat) return;
@@ -789,13 +986,15 @@ const Dashboard = () => {
                             senderUid: currentUser.uid,
                             content: file.name,
                             messageType: 'image',
-                            fileUrl: data.url
+                            fileUrl: data.url,
+                            replyTo: replyingToMessage ? replyingToMessage._id : null
                         })
                     });
 
                     const message = await msgResponse.json();
                     setMessages(prev => [...prev, message]);
                     sendMessage(receiver.uid, message);
+                    setReplyingToMessage(null);
                 }
             } catch (error) {
                 console.error('Error uploading image:', error);
@@ -808,25 +1007,37 @@ const Dashboard = () => {
 
     // Add emoji to message
     const addEmoji = (emoji) => {
-        if (editingMessage) {
+        if (isSearching) {
+            const newTerm = chatSearchTerm + emoji;
+            setChatSearchTerm(newTerm);
+            // Manually trigger the search logic since state update is async
+            fetch(`http://localhost:5000/api/messages/${selectedChat._id}/search?q=${encodeURIComponent(newTerm)}`)
+                .then(res => res.json())
+                .then(data => {
+                    setSearchResults(data);
+                    setCurrentSearchIndex(0);
+                    // Refocus search input after state update
+                    setTimeout(() => {
+                        if (searchInputRef.current) searchInputRef.current.focus();
+                    }, 0);
+                })
+                .catch(err => console.error('Error searching with emoji:', err));
+        } else if (editingMessage) {
             setEditContent(prev => prev + emoji);
         } else {
             setNewMessage(prev => prev + emoji);
         }
-        // Don't close picker automatically to allow multiple emojis
     };
 
     // Handle backspace in emoji picker
     const handleBackspace = () => {
         const deleteLastCharacter = (str) => {
             if (!str) return str;
-            // Use Intl.Segmenter to correctly handle complex Emojis (surrogate pairs, ZWJ sequences, flags, etc.)
             if (typeof Intl !== 'undefined' && Intl.Segmenter) {
                 const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
                 const segments = Array.from(segmenter.segment(str)).map(s => s.segment);
                 return segments.slice(0, -1).join('');
             }
-            // Fallback
             const arr = [...str];
             return arr.slice(0, -1).join('');
         };
@@ -853,7 +1064,7 @@ const Dashboard = () => {
         return chat.participants.find(p => p.uid !== currentUser.uid);
     };
 
-    // Filter users - show all users (friends and non-friends)
+    // Filter users
     const filteredUsers = users.filter(user => {
         const name = (user.displayName || user.email).toLowerCase();
         return name.includes(searchTerm.toLowerCase());
@@ -886,11 +1097,9 @@ const Dashboard = () => {
             const data = await response.json();
             if (data.success) {
                 fetchDbUser(currentUser.uid);
-                // Refresh chats to remove the chat with this friend
                 const chatResponse = await fetch(`http://localhost:5000/api/chats/${currentUser.uid}`);
                 const chatData = await chatResponse.json();
                 setChats(chatData);
-                // Clear selected chat if it was with this friend
                 if (selectedChat) {
                     const otherUser = selectedChat.participants.find(p => p.uid !== currentUser.uid);
                     if (otherUser && otherUser.uid === friendUid) {
@@ -922,38 +1131,346 @@ const Dashboard = () => {
         }
     };
 
+    // Handle chat history search
+    const handleChatSearch = async (e) => {
+        const term = e.target.value;
+        setChatSearchTerm(term);
+
+        if (!term.trim() || !selectedChat) {
+            setSearchResults([]);
+            return;
+        }
+
+        try {
+            const response = await fetch(`http://localhost:5000/api/messages/${selectedChat._id}/search?q=${encodeURIComponent(term)}`);
+            const data = await response.json();
+            setSearchResults(data);
+            setCurrentSearchIndex(0);
+            setShowSearchDropdown(data.length > 0);
+        } catch (error) {
+            console.error('Error searching messages:', error);
+        }
+    };
+
+    const handleNextSearch = () => {
+        if (searchResults.length > 0) {
+            setCurrentSearchIndex((prev) => (prev < searchResults.length - 1 ? prev + 1 : 0));
+            scrollToSearchResult(currentSearchIndex < searchResults.length - 1 ? currentSearchIndex + 1 : 0);
+        }
+    };
+
+    const handlePrevSearch = () => {
+        if (searchResults.length > 0) {
+            setCurrentSearchIndex((prev) => (prev > 0 ? prev - 1 : searchResults.length - 1));
+            scrollToSearchResult(currentSearchIndex > 0 ? currentSearchIndex - 1 : searchResults.length - 1);
+        }
+    };
+
+    const scrollToSearchResult = (index) => {
+        const msg = searchResults[index];
+        if (!msg) return;
+        const el = document.getElementById(`message-${msg._id}`) || document.querySelector(`[data-message-ids~="${msg._id}"]`);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.classList.add('highlight-pulse');
+            setTimeout(() => el.classList.remove('highlight-pulse'), 1500);
+        }
+    };
+
     const [showMessageMenu, setShowMessageMenu] = useState(null);
+    const [showSearchDropdown, setShowSearchDropdown] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState([]);
 
     const handleSelectMessage = (item) => {
         const isGroup = item.type === 'image-group';
         const mainMsg = isGroup ? item.messages[0] : item;
 
-        // Only allow selecting user's own non-deleted messages
-        if (!mainMsg.isDeleted && mainMsg.sender?.uid === currentUser.uid) {
+        if (!mainMsg.isDeleted) {
             const itemIds = isGroup ? item.messages.map(m => m._id) : [item._id];
 
             setSelectedMessageIds(prev => {
                 const allExists = itemIds.every(id => prev.includes(id));
                 if (allExists) {
-                    // Remove all from selection
                     return prev.filter(id => !itemIds.includes(id));
                 } else {
-                    // Add all to selection (unique)
                     return [...new Set([...prev, ...itemIds])];
                 }
             });
-            setEditingMessage(null); // Cancel any ongoing edit locally
+            setEditingMessage(null);
             setEditContent('');
+            setReplyingToMessage(null);
         }
     };
 
     const clearSelection = () => {
         setSelectedMessageIds([]);
+        setShowSelectionDropdown(false);
     };
 
     const selectedMessages = messages.filter(m => selectedMessageIds.includes(m._id));
     const firstSelectedMessage = selectedMessages[0];
+    const allSelectedMine = selectedMessages.every(m => m.sender?.uid === currentUser.uid);
+    const firstSelectedMessageMine = firstSelectedMessage?.sender?.uid === currentUser.uid;
+
+    const groupedMessages = [];
+    messages.forEach((msg, index) => {
+        const prevMsg = messages[index - 1];
+        const isImage = msg.messageType === 'image';
+        const isSameSender = prevMsg && (msg.sender?.uid || msg.senderUid) === (prevMsg.sender?.uid || prevMsg.senderUid);
+        const timeDiff = prevMsg ? (new Date(msg.createdAt) - new Date(prevMsg.createdAt)) / 1000 : Infinity;
+
+        if (isImage && prevMsg && prevMsg.messageType === 'image' && isSameSender && timeDiff < 15) {
+            const lastGroup = groupedMessages[groupedMessages.length - 1];
+            if (lastGroup.type === 'image-group') {
+                lastGroup.messages.push(msg);
+            } else {
+                groupedMessages.pop();
+                groupedMessages.push({
+                    type: 'image-group',
+                    messages: [prevMsg, msg],
+                    senderUid: msg.senderUid,
+                    sender: msg.sender,
+                    createdAt: msg.createdAt,
+                    _id: `group-${msg._id}`
+                });
+            }
+        } else {
+            groupedMessages.push({ ...msg, type: 'single' });
+        }
+    });
+
+    const isSingleSelection = selectedMessageIds.length > 0 && groupedMessages.filter(gMsg => {
+        if (gMsg.type === 'image-group') {
+            return gMsg.messages.some(m => selectedMessageIds.includes(m._id));
+        } else {
+            return selectedMessageIds.includes(gMsg._id);
+        }
+    }).length === 1;
+
+    // ─── WebRTC Call Functions ────────────────────────────────────────────────
+    const STUN_SERVERS = {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+        ]
+    };
+
+    const formatCallDuration = (secs) => {
+        const h = Math.floor(secs / 3600);
+        const m = Math.floor((secs % 3600) / 60);
+        const s = secs % 60;
+        if (h > 0) {
+            return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+        return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    };
+
+    const cleanupCall = () => {
+        if (localStreamRef.current) {
+            localStreamRef.current.getTracks().forEach(t => t.stop());
+            localStreamRef.current = null;
+        }
+        if (peerConnectionRef.current) {
+            peerConnectionRef.current.close();
+            peerConnectionRef.current = null;
+        }
+        iceCandidateQueueRef.current = [];
+        if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
+        if (callDurationTimerRef.current) { clearInterval(callDurationTimerRef.current); callDurationTimerRef.current = null; }
+        setCallState('idle');
+        setIncomingCallData(null);
+        setLocalStream(null);
+        setRemoteStream(null);
+        setIsVideoEnabled(true);
+        setIsMicMuted(false);
+        setActiveCallUser(null);
+        setCallDuration(0);
+    };
+
+    const initPeerConnection = (targetUserId) => {
+        const pc = new RTCPeerConnection(STUN_SERVERS);
+
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                sendIceCandidate(targetUserId, event.candidate);
+            }
+        };
+
+        // ─── BUG FIX: assign srcObject directly here, not via React state → useEffect.
+        // The video element ref may be null when the useEffect runs because React hasn't
+        // committed the new render yet. Assigning here (synchronously in the event) is
+        // always safe and immediate. We ALSO call setRemoteStream so the UI reacts.
+        pc.ontrack = (event) => {
+            const incomingStream = (event.streams && event.streams[0])
+                ? event.streams[0]
+                : new MediaStream([event.track]);
+
+            setRemoteStream(incomingStream);
+
+            // Direct DOM assignment — bypasses React rendering delay
+            if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = incomingStream;
+                remoteVideoRef.current.play().catch(() => { });
+            }
+        };
+
+        pc.onconnectionstatechange = () => {
+            const state = pc.connectionState;
+            if (state === 'disconnected' || state === 'failed' || state === 'closed') {
+                cleanupCall();
+            }
+        };
+
+        return pc;
+    };
+
+    const startCall = async () => {
+        if (!selectedChat || callStateRef.current !== 'idle') return;
+        const otherUser = getOtherUser(selectedChat);
+        if (!otherUser) return;
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localStreamRef.current = stream;
+            setLocalStream(stream);
+
+            const pc = initPeerConnection(otherUser.uid);
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            peerConnectionRef.current = pc;
+
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+
+            setCallState('calling');
+            setActiveCallUser({
+                uid: otherUser.uid,
+                name: otherUser.displayName || otherUser.email,
+                photo: otherUser.photoURL || ''
+            });
+
+            initiateCall(otherUser.uid, offer, {
+                uid: currentUser.uid,
+                name: dbUser?.displayName || currentUser.displayName || currentUser.email,
+                photo: dbUser?.photoURL || currentUser.photoURL || ''
+            }, selectedChat._id);
+
+            // ─── BUG FIX: assign local stream directly after state update.
+            // After setCallState('calling') React schedules a re-render. The video element
+            // (<video ref={localVideoRef}>) only exists after that render commits. We use
+            // requestAnimationFrame to wait one paint cycle then assign srcObject.
+            requestAnimationFrame(() => {
+                if (localVideoRef.current && localStreamRef.current) {
+                    localVideoRef.current.srcObject = localStreamRef.current;
+                }
+            });
+
+            // 30-second no-answer timeout
+            callTimeoutRef.current = setTimeout(() => {
+                if (callStateRef.current === 'calling') {
+                    endCall(otherUser.uid);
+                    cleanupCall();
+                    alert('No answer. The call timed out.');
+                }
+            }, 30000);
+        } catch (err) {
+            console.error('startCall error:', err);
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                alert('Camera/microphone access denied.\nPlease allow permissions in your browser and try again.');
+            } else if (err.name === 'NotFoundError') {
+                alert('No camera or microphone found.\nPlease connect a device and try again.');
+            } else {
+                alert('Could not start call. Please check your camera and microphone.');
+            }
+            cleanupCall();
+        }
+    };
+
+    const handleAcceptCall = async () => {
+        if (!incomingCallData) return;
+        const { callerId, callerName, callerPhoto, offer } = incomingCallData;
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            localStreamRef.current = stream;
+            setLocalStream(stream);
+
+            const pc = initPeerConnection(callerId);
+            stream.getTracks().forEach(track => pc.addTrack(track, stream));
+            peerConnectionRef.current = pc;
+
+            await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+            // Flush queued ICE candidates
+            for (const candidate of iceCandidateQueueRef.current) {
+                await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+            }
+            iceCandidateQueueRef.current = [];
+
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+
+            acceptCall(callerId, currentUser.uid, answer);
+
+            setCallState('active');
+            setActiveCallUser({ uid: callerId, name: callerName, photo: callerPhoto });
+            setIncomingCallData(null);
+
+            // ─── BUG FIX: wait one paint cycle then assign local srcObject.
+            requestAnimationFrame(() => {
+                if (localVideoRef.current && localStreamRef.current) {
+                    localVideoRef.current.srcObject = localStreamRef.current;
+                }
+            });
+
+            callDurationTimerRef.current = setInterval(() => {
+                setCallDuration(prev => prev + 1);
+            }, 1000);
+        } catch (err) {
+            console.error('handleAcceptCall error:', err);
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                alert('Camera/microphone access denied.\nPlease allow permissions and try again.');
+            } else {
+                alert('Could not connect the call. Please check your camera and microphone.');
+            }
+            declineCall(callerId, currentUser.uid);
+            cleanupCall();
+        }
+    };
+
+    const handleDeclineCall = () => {
+        if (!incomingCallData) return;
+        declineCall(incomingCallData.callerId, currentUser.uid);
+        cleanupCall();
+    };
+
+    const handleEndCall = () => {
+        if (activeCallUser) {
+            endCall(activeCallUser.uid, currentUser.uid);
+        }
+        cleanupCall();
+    };
+
+    const toggleVideo = () => {
+        if (localStreamRef.current) {
+            const videoTrack = localStreamRef.current.getVideoTracks()[0];
+            if (videoTrack) {
+                videoTrack.enabled = !videoTrack.enabled;
+                setIsVideoEnabled(videoTrack.enabled);
+            }
+        }
+    };
+
+    const toggleMic = () => {
+        if (localStreamRef.current) {
+            const audioTrack = localStreamRef.current.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                setIsMicMuted(!audioTrack.enabled);
+            }
+        }
+    };
+    // ─────────────────────────────────────────────────────────────────────────
 
     return (
         <div className="dashboard">
@@ -978,7 +1495,15 @@ const Dashboard = () => {
                 ref={sidebarRef}
             >
                 <div className="sidebar-header">
-                    <h2>KoreTalk</h2>
+                    <h2
+                        onClick={() => {
+                            setSelectedChat(null);
+                            if (window.innerWidth <= 768) setSidebarOpen(false);
+                        }}
+                        className="sidebar-logo"
+                    >
+                        KnokTalk
+                    </h2>
                     <div className="sidebar-actions">
                         <button
                             className={`icon-btn ${showUsers ? 'active' : ''}`}
@@ -1018,22 +1543,39 @@ const Dashboard = () => {
 
                 {/* User Profile */}
                 <div className="user-profile">
-                    {(dbUser?.photoURL || currentUser?.photoURL) ? (
-                        <img
-                            src={dbUser?.photoURL || currentUser?.photoURL}
-                            alt="User"
-                            className="user-avatar"
-                            onError={(e) => {
-                                e.target.style.display = 'none';
-                                const placeholder = e.target.nextSibling;
-                                if (placeholder) placeholder.style.display = 'flex';
-                            }}
+                    <div className="avatar-wrapper" style={{ position: 'relative', display: 'flex' }}>
+                        {(dbUser?.photoURL || currentUser?.photoURL) ? (
+                            <img
+                                src={dbUser?.photoURL || currentUser?.photoURL}
+                                alt="User"
+                                className="user-avatar"
+                                onError={(e) => {
+                                    e.target.style.display = 'none';
+                                    const placeholder = e.target.nextSibling;
+                                    if (placeholder) placeholder.style.display = 'flex';
+                                }}
+                            />
+                        ) : null}
+                        <div
+                            className="user-avatar user-avatar-placeholder"
+                            style={{ display: (dbUser?.photoURL || currentUser?.photoURL) ? 'none' : 'flex' }}
                         />
-                    ) : null}
-                    <div
-                        className="user-avatar user-avatar-placeholder"
-                        style={{ display: (dbUser?.photoURL || currentUser?.photoURL) ? 'none' : 'flex' }}
-                    />
+                        {unreadChats.size > 0 && (
+                            <span className="unread-dot"
+                                style={{
+                                    position: 'absolute',
+                                    top: '-2px',
+                                    right: '-2px',
+                                    width: '12px',
+                                    height: '12px',
+                                    // backgroundColor: '#ef4444',
+                                    backgroundColor: '#4f46e5',
+                                    border: '2px solid var(--background-sidebar)',
+                                    borderRadius: '50%',
+                                    zIndex: 10
+                                }}></span>
+                        )}
+                    </div>
                     <div className="user-info">
                         <span className="user-name">{dbUser?.displayName || currentUser?.displayName || 'User'}</span>
                         <span className="user-email">{currentUser?.email}</span>
@@ -1137,26 +1679,50 @@ const Dashboard = () => {
                                 <div
                                     key={chat._id}
                                     className={`chat-item ${selectedChat?._id === chat._id ? 'active' : ''}`}
-                                    onClick={() => setSelectedChat(chat)}
+                                    onClick={() => {
+                                        setSelectedChat(chat);
+                                        setUnreadChats(prev => {
+                                            const newSet = new Set(prev);
+                                            newSet.delete(chat._id);
+                                            return newSet;
+                                        });
+                                    }}
                                 >
-                                    {otherUser?.photoURL ? (
-                                        <img
-                                            src={otherUser.photoURL}
-                                            alt="User"
-                                            className="user-avatar-small"
-                                            onError={(e) => {
-                                                e.target.style.display = 'none';
-                                                e.target.nextSibling.style.display = 'flex';
-                                            }}
+                                    <div className="avatar-wrapper" style={{ position: 'relative', display: 'flex' }}>
+                                        {otherUser?.photoURL ? (
+                                            <img
+                                                src={otherUser.photoURL}
+                                                alt="User"
+                                                className="user-avatar-small"
+                                                onError={(e) => {
+                                                    e.target.style.display = 'none';
+                                                    e.target.nextSibling.style.display = 'flex';
+                                                }}
+                                            />
+                                        ) : null}
+                                        <div
+                                            className="user-avatar-small user-avatar-small-placeholder"
+                                            style={{ display: otherUser?.photoURL ? 'none' : 'flex' }}
                                         />
-                                    ) : null}
-                                    <div
-                                        className="user-avatar-small user-avatar-small-placeholder"
-                                        style={{ display: otherUser?.photoURL ? 'none' : 'flex' }}
-                                    />
+                                        {unreadChats.has(chat._id) && (
+                                            <span className="unread-dot"
+                                                style={{
+                                                    position: 'absolute',
+                                                    top: '-2px',
+                                                    right: '-2px',
+                                                    width: '12px',
+                                                    height: '12px',
+                                                    // backgroundColor: '#ef4444',
+                                                    backgroundColor: '#4f46e5',
+                                                    border: '2px solid var(--background-sidebar)',
+                                                    borderRadius: '50%',
+                                                    zIndex: 10
+                                                }}>
+                                            </span>
+                                        )}
+                                    </div>
                                     <div className="chat-details">
                                         <span className="chat-name">{otherUser?.displayName || otherUser?.email}</span>
-                                        {/* <span className="last-message">{chat.lastMessage || 'No messages yet'}</span> */}
                                     </div>
                                 </div>
                             );
@@ -1176,8 +1742,24 @@ const Dashboard = () => {
                                         <FiX />
                                     </button>
                                     <span className="selection-count">{selectedMessageIds.length} Selected</span>
-                                    <div className="chat-header-actions selection-actions">
-                                        {selectedMessageIds.length === 1 && firstSelectedMessage?.messageType !== 'audio' && (
+
+                                    {/* Desktop Selection Actions (≥992px) */}
+                                    <div className="chat-header-actions selection-actions desktop-actions">
+                                        {isSingleSelection && !firstSelectedMessage?.isError && (
+                                            <button
+                                                className="reply-action-btn edit-action-btn"
+                                                onClick={() => {
+                                                    if (firstSelectedMessage) {
+                                                        setReplyingToMessage(firstSelectedMessage);
+                                                        clearSelection();
+                                                    }
+                                                }}
+                                                title="Reply to Message"
+                                            >
+                                                <FiCornerUpLeft /> <span className="action-text">Reply</span>
+                                            </button>
+                                        )}
+                                        {isSingleSelection && firstSelectedMessageMine && firstSelectedMessage?.messageType !== 'audio' && firstSelectedMessage?.messageType !== 'image' && firstSelectedMessage?.messageType !== 'video_call' && (
                                             <button
                                                 className="edit-action-btn"
                                                 onClick={() => {
@@ -1191,13 +1773,65 @@ const Dashboard = () => {
                                                 <FiEdit /> <span className="action-text">Edit</span>
                                             </button>
                                         )}
+                                        {allSelectedMine && (
+                                            <button
+                                                className="delete-action-btn remove-messages-btn"
+                                                onClick={() => handleDeleteMessages(selectedMessageIds)}
+                                                title="Delete Selected"
+                                            >
+                                                <FiTrash2 /> <span className="action-text">Delete</span>
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    {/* Mobile/Tablet Selection Dropdown (<992px) */}
+                                    <div className="chat-header-actions selection-actions mobile-actions header-dropdown-wrapper">
                                         <button
-                                            className="delete-action-btn remove-messages-btn"
-                                            onClick={() => handleDeleteMessages(selectedMessageIds)}
-                                            title="Delete Selected"
+                                            className="header-dropdown-btn"
+                                            onClick={() => setShowSelectionDropdown(prev => !prev)}
+                                            title="More options"
                                         >
-                                            <FiTrash2 /> <span className="action-text">Delete</span>
+                                            <FiMoreVertical />
                                         </button>
+                                        {showSelectionDropdown && (
+                                            <div className="header-dropdown-menu">
+                                                {isSingleSelection && !firstSelectedMessage?.isError && (
+                                                    <button
+                                                        className="header-dropdown-item"
+                                                        onClick={() => {
+                                                            if (firstSelectedMessage) {
+                                                                setReplyingToMessage(firstSelectedMessage);
+                                                                clearSelection();
+                                                            }
+                                                        }}
+                                                    >
+                                                        <FiCornerUpLeft /> Reply
+                                                    </button>
+                                                )}
+                                                {isSingleSelection && firstSelectedMessageMine && firstSelectedMessage?.messageType !== 'audio' && firstSelectedMessage?.messageType !== 'image' && firstSelectedMessage?.messageType !== 'video_call' && (
+                                                    <button
+                                                        className="header-dropdown-item"
+                                                        onClick={() => {
+                                                            if (firstSelectedMessage) {
+                                                                startEditing(firstSelectedMessage);
+                                                                clearSelection();
+                                                            }
+                                                        }}
+                                                    >
+                                                        <FiEdit /> Edit
+                                                    </button>
+                                                )}
+                                                {allSelectedMine && (
+                                                    <button
+                                                        className="header-dropdown-item remove-messages-btn-dropdown"
+                                                        // style={{ color: 'var(--error-color)' }}
+                                                        onClick={() => handleDeleteMessages(selectedMessageIds)}
+                                                    >
+                                                        <FiTrash2 /> Delete
+                                                    </button>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 </>
                             ) : (
@@ -1218,13 +1852,15 @@ const Dashboard = () => {
                                         style={{ display: getOtherUser(selectedChat)?.photoURL ? 'none' : 'flex' }}
                                     />
                                     <span className="chat-name">{getOtherUser(selectedChat)?.displayName || getOtherUser(selectedChat)?.email}</span>
-                                    <div className="chat-header-actions">
+
+                                    {/* ── Desktop Actions (≥992px) ───────────────── */}
+                                    <div className="chat-header-actions desktop-actions">
                                         <button
                                             className="remove-messages-btn"
                                             onClick={handleRemoveAllMyMessages}
                                             title="Remove all my messages"
                                         >
-                                            <FiTrash2 /> <span className="action-text">Remove My Messages</span>
+                                            <FiTrash2 /> <span className="action-text">Remove</span>
                                         </button>
                                         {isBlocked ? (
                                             <button
@@ -1243,10 +1879,180 @@ const Dashboard = () => {
                                                 <FiLock /> <span className="action-text">Block</span>
                                             </button>
                                         )}
+                                        <button
+                                            className="search-btn"
+                                            onClick={() => setIsSearching(true)}
+                                            title="Search conversation"
+                                        >
+                                            <FiSearch /> <span className="action-text">Search</span>
+                                        </button>
+                                        <button
+                                            id="call-btn-desktop"
+                                            className="call-btn"
+                                            onClick={startCall}
+                                            title="Start video call"
+                                            disabled={callState !== 'idle'}
+                                        >
+                                            <FiVideo /> <span className="action-text">Call</span>
+                                        </button>
+                                    </div>
+
+                                    {/* ── Mobile/Tablet Dropdown (<992px) ───────── */}
+                                    <div className="chat-header-actions mobile-actions header-dropdown-wrapper">
+                                        <button
+                                            id="header-dropdown-btn"
+                                            className="header-dropdown-btn"
+                                            onClick={() => setShowHeaderDropdown(prev => !prev)}
+                                            title="More options"
+                                        >
+                                            <FiMoreVertical />
+                                        </button>
+                                        {showHeaderDropdown && (
+                                            <div className="header-dropdown-menu">
+                                                <button
+                                                    className="header-dropdown-item"
+                                                    onClick={() => { handleRemoveAllMyMessages(); setShowHeaderDropdown(false); }}
+                                                >
+                                                    <FiTrash2 /> Remove
+                                                </button>
+                                                {isBlocked ? (
+                                                    <button
+                                                        className="header-dropdown-item"
+                                                        onClick={() => { handleUnblockUser(); setShowHeaderDropdown(false); }}
+                                                    >
+                                                        <FiUnlock /> Unblock
+                                                    </button>
+                                                ) : (
+                                                    <button
+                                                        className="header-dropdown-item"
+                                                        onClick={() => { handleBlockUser(); setShowHeaderDropdown(false); }}
+                                                    >
+                                                        <FiLock /> Block
+                                                    </button>
+                                                )}
+                                                <button
+                                                    className="header-dropdown-item"
+                                                    onClick={() => { setIsSearching(true); setShowHeaderDropdown(false); }}
+                                                >
+                                                    <FiSearch /> Search
+                                                </button>
+                                                <button
+                                                    id="call-btn-mobile"
+                                                    className="header-dropdown-item call-dropdown-item"
+                                                    onClick={() => { startCall(); setShowHeaderDropdown(false); }}
+                                                    disabled={callState !== 'idle'}
+                                                >
+                                                    <FiVideo /> Call
+                                                </button>
+                                            </div>
+                                        )}
                                     </div>
                                 </>
                             )}
                         </div>
+
+                        {isSearching && (
+                            <div className="chat-search-bar-under-header">
+                                <div className="chat-header-search-container">
+                                    <div className="search-input-row">
+                                        <FiSearch className="search-icon-left" />
+                                        <input
+                                            type="text"
+                                            ref={searchInputRef}
+                                            className="chat-search-input"
+                                            placeholder="Search in chat..."
+                                            value={chatSearchTerm}
+                                            onChange={handleChatSearch}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && searchResults.length > 0) {
+                                                    scrollToSearchResult(currentSearchIndex);
+                                                    setShowSearchDropdown(false);
+                                                }
+                                            }}
+                                            onFocus={() => {
+                                                if (searchResults.length > 0) setShowSearchDropdown(true);
+                                            }}
+                                            autoFocus
+                                        />
+                                        <button
+                                            type="button"
+                                            className="icon-btn search-emoji-btn"
+                                            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                                            title="Emojis"
+                                        >
+                                            <FiSmile />
+                                        </button>
+                                        <div className="search-actions-right">
+                                            {searchResults.length > 0 && (
+                                                <span className="search-count-text">
+                                                    {currentSearchIndex + 1} of {searchResults.length}
+                                                </span>
+                                            )}
+                                            <button className="icon-btn" onClick={handlePrevSearch} title="Previous result">
+                                                <FiChevronUp />
+                                            </button>
+                                            <button className="icon-btn" onClick={handleNextSearch} title="Next result">
+                                                <FiChevronDown />
+                                            </button>
+                                            <button className="icon-btn close-search-btn" onClick={() => {
+                                                setIsSearching(false);
+                                                setChatSearchTerm('');
+                                                setSearchResults([]);
+                                                setShowSearchDropdown(false);
+                                            }} title="Close search">
+                                                <FiX />
+                                            </button>
+                                        </div>
+                                    </div>
+                                    {chatSearchTerm && searchResults.length > 0 && showSearchDropdown && (
+                                        <div className="chat-search-dropdown-results">
+                                            {searchResults.map((msg, idx) => {
+                                                const senderName = msg.sender?.displayName || msg.sender?.email || 'User';
+                                                const date = new Date(msg.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+                                                // Highlight logic
+                                                const escapedHighlightTerm = chatSearchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                                                const regex = new RegExp(`(${escapedHighlightTerm})`, 'gi');
+                                                const parts = msg.content.split(regex);
+
+                                                return (
+                                                    <div
+                                                        key={msg._id}
+                                                        className={`search-dropdown-item ${idx === currentSearchIndex ? 'active-result' : ''}`}
+                                                        onClick={() => {
+                                                            setCurrentSearchIndex(idx);
+                                                            scrollToSearchResult(idx);
+                                                            setShowSearchDropdown(false);
+                                                        }}
+                                                    >
+                                                        {msg.sender?.photoURL ? (
+                                                            <img src={msg.sender.photoURL} alt="Avatar" className="search-dropdown-avatar" />
+                                                        ) : (
+                                                            <div className="search-dropdown-avatar placeholder" />
+                                                        )}
+                                                        <div className="search-dropdown-content">
+                                                            <div className="search-dropdown-header">
+                                                                <span className="search-dropdown-name">{senderName}</span>
+                                                                <span className="search-dropdown-date">{date}</span>
+                                                            </div>
+                                                            <div className="search-dropdown-text">
+                                                                {parts.map((part, i) =>
+                                                                    regex.test(part) ? (
+                                                                        <mark key={i} className="highlighted-text">{part}</mark>
+                                                                    ) : (
+                                                                        <span key={i}>{part}</span>
+                                                                    )
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
 
                         <div className={`messages ${isBlocked ? 'disabled' : ''}`}>
                             {isBlocked && (
@@ -1255,133 +2061,138 @@ const Dashboard = () => {
                                     <p>You have blocked this user. Unblock to send messages.</p>
                                 </div>
                             )}
-                            {(() => {
-                                const groupedMessages = [];
-                                messages.forEach((msg, index) => {
-                                    const prevMsg = messages[index - 1];
-                                    const isImage = msg.messageType === 'image';
-                                    const isSameSender = prevMsg && (msg.sender?.uid || msg.senderUid) === (prevMsg.sender?.uid || prevMsg.senderUid);
-                                    const timeDiff = prevMsg ? (new Date(msg.createdAt) - new Date(prevMsg.createdAt)) / 1000 : Infinity;
+                            {groupedMessages.map((gMsg, index) => {
+                                const isGroup = gMsg.type === 'image-group';
+                                const msg = isGroup ? gMsg.messages[0] : gMsg;
+                                const sender = msg.sender || users.find(u => u.uid === msg.senderUid);
+                                const isSentByMe = (msg.sender?.uid || msg.senderUid) === currentUser.uid;
 
-                                    if (isImage && prevMsg && prevMsg.messageType === 'image' && isSameSender && timeDiff < 15) {
-                                        const lastGroup = groupedMessages[groupedMessages.length - 1];
-                                        if (lastGroup.type === 'image-group') {
-                                            lastGroup.messages.push(msg);
-                                        } else {
-                                            groupedMessages.pop();
-                                            groupedMessages.push({
-                                                type: 'image-group',
-                                                messages: [prevMsg, msg],
-                                                senderUid: msg.senderUid,
-                                                sender: msg.sender,
-                                                createdAt: msg.createdAt,
-                                                _id: `group-${msg._id}`
-                                            });
-                                        }
-                                    } else {
-                                        groupedMessages.push({ ...msg, type: 'single' });
-                                    }
-                                });
+                                const isAnySelected = isGroup
+                                    ? gMsg.messages.some(m => selectedMessageIds.includes(m._id))
+                                    : selectedMessageIds.includes(gMsg._id);
 
-                                return groupedMessages.map((gMsg, index) => {
-                                    const isGroup = gMsg.type === 'image-group';
-                                    const msg = isGroup ? gMsg.messages[0] : gMsg;
-                                    const sender = msg.sender || users.find(u => u.uid === msg.senderUid);
-                                    const isSentByMe = (msg.sender?.uid || msg.senderUid) === currentUser.uid;
-
-                                    const isAnySelected = isGroup
-                                        ? gMsg.messages.some(m => selectedMessageIds.includes(m._id))
-                                        : selectedMessageIds.includes(gMsg._id);
-
-                                    return (
-                                        <div
-                                            key={gMsg._id || index}
-                                            className={`message-wrapper ${isSentByMe ? 'sent' : 'received'} ${isAnySelected ? 'selected-wrapper' : ''} ${isGroup ? 'group-wrapper' : ''} ${msg.isEdited ? 'has-edited' : ''}`}
-                                        >
-                                            {sender?.photoURL ? (
-                                                <img
-                                                    src={sender.photoURL}
-                                                    alt="User"
-                                                    className="message-avatar"
-                                                    onError={(e) => {
-                                                        e.target.style.display = 'none';
-                                                        e.target.nextSibling.style.display = 'flex';
-                                                    }}
-                                                />
-                                            ) : null}
-                                            <div
-                                                className="message-avatar message-avatar-placeholder"
-                                                style={{ display: sender?.photoURL ? 'none' : 'flex' }}
-                                            />
-
-                                            <div
-                                                className={`message ${isSentByMe ? 'sent' : 'received'} ${msg.isDeleted ? 'deleted' : ''} ${msg.isError ? 'error' : ''} ${isAnySelected ? 'selected' : ''} ${isGroup ? 'group-message' : ''}`}
-                                                onDoubleClick={() => handleSelectMessage(gMsg)}
-                                                onContextMenu={(e) => {
-                                                    if (window.innerWidth <= 768) {
-                                                        e.preventDefault();
-                                                        handleSelectMessage(gMsg);
-                                                    }
+                                return (
+                                    <div
+                                        id={`message-${gMsg._id || index}`}
+                                        key={gMsg._id || index}
+                                        data-message-ids={isGroup ? gMsg.messages.map(m => m._id).join(' ') : gMsg._id}
+                                        className={`message-wrapper ${isSentByMe ? 'sent' : 'received'} ${isAnySelected ? 'selected-wrapper' : ''} ${isGroup ? 'group-wrapper' : ''} ${msg.isEdited ? 'has-edited' : ''}`}
+                                    >
+                                        {sender?.photoURL ? (
+                                            <img
+                                                src={sender.photoURL}
+                                                alt="User"
+                                                className="message-avatar"
+                                                onError={(e) => {
+                                                    e.target.style.display = 'none';
+                                                    e.target.nextSibling.style.display = 'flex';
                                                 }}
-                                            >
-                                                {isGroup ? (
-                                                    <div className="message-content-container">
-                                                        <div className={`image-grid grid-${Math.min(gMsg.messages.length, 5)}`}>
-                                                            {gMsg.messages.map((imgMsg, imgIndex) => (
-                                                                <div key={imgMsg._id || imgIndex} className="image-grid-item">
-                                                                    <img
-                                                                        src={imgMsg.fileUrl}
-                                                                        alt="Shared"
-                                                                        className="message-image"
-                                                                        onClick={() => setFullscreenImage(imgMsg)}
-                                                                    />
-                                                                </div>
-                                                            ))}
-                                                        </div>
+                                            />
+                                        ) : null}
+                                        <div
+                                            className="message-avatar message-avatar-placeholder"
+                                            style={{ display: sender?.photoURL ? 'none' : 'flex' }}
+                                        />
+
+                                        <div
+                                            className={`message ${isSentByMe ? 'sent' : 'received'} ${msg.isDeleted ? 'deleted' : ''} ${msg.isError ? 'error' : ''} ${isAnySelected ? 'selected' : ''} ${isGroup ? 'group-message' : ''}`}
+                                            onDoubleClick={() => handleSelectMessage(gMsg)}
+                                            onContextMenu={(e) => {
+                                                if (window.innerWidth <= 768) {
+                                                    e.preventDefault();
+                                                    handleSelectMessage(gMsg);
+                                                }
+                                            }}
+                                        >
+                                            {msg.replyTo && (
+                                                <div
+                                                    className="quoted-message"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        const el = document.getElementById(`message-${msg.replyTo._id}`) || document.querySelector(`[data-message-ids~="${msg.replyTo._id}"]`);
+                                                        if (el) {
+                                                            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                                            el.classList.add('highlight-pulse');
+                                                            setTimeout(() => el.classList.remove('highlight-pulse'), 1500);
+                                                        }
+                                                    }}
+                                                >
+                                                    <span className="quoted-name">
+                                                        {msg.replyTo.sender?.uid === currentUser.uid
+                                                            ? (isSentByMe ? 'Yourself' : 'You')
+                                                            : (msg.replyTo.sender?.displayName || msg.replyTo.sender?.email || 'Someone')}
+                                                    </span>
+                                                    <div className="quoted-text">
+                                                        {msg.replyTo.messageType === 'image' ? '📸 Photo' :
+                                                            msg.replyTo.messageType === 'audio' ? '🎵 Voice message' :
+                                                                msg.replyTo.content || 'Attachment'}
                                                     </div>
-                                                ) : msg.messageType === 'image' ? (
-                                                    <div className="message-content-container">
-                                                        <div className="message-image-container">
-                                                            <img
-                                                                src={msg.fileUrl}
-                                                                alt="Shared"
-                                                                className="message-image"
-                                                                onClick={() => setFullscreenImage(msg)}
-                                                            />
-                                                        </div>
+                                                </div>
+                                            )}
+                                            {isGroup ? (
+                                                <div className="message-content-container">
+                                                    <div className={`image-grid grid-${Math.min(gMsg.messages.length, 5)}`}>
+                                                        {gMsg.messages.map((imgMsg, imgIndex) => (
+                                                            <div key={imgMsg._id || imgIndex} className="image-grid-item">
+                                                                <img
+                                                                    src={imgMsg.fileUrl}
+                                                                    alt="Shared"
+                                                                    className="message-image"
+                                                                    onClick={() => setFullscreenImage(imgMsg)}
+                                                                />
+                                                            </div>
+                                                        ))}
                                                     </div>
-                                                ) : msg.messageType === 'file' ? (
-                                                    <div className="message-content-container">
-                                                        <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" className="message-file">
-                                                            <FiPaperclip /> {msg.fileName || msg.content}
-                                                        </a>
-                                                    </div>
-                                                ) : msg.messageType === 'audio' ? (
-                                                    <div className="message-content-container">
-                                                        <AudioPlayer
+                                                </div>
+                                            ) : msg.messageType === 'image' ? (
+                                                <div className="message-content-container">
+                                                    <div className="message-image-container">
+                                                        <img
                                                             src={msg.fileUrl}
-                                                            durationLabel={msg.content}
-                                                            isSentByMe={isSentByMe}
+                                                            alt="Shared"
+                                                            className="message-image"
+                                                            onClick={() => setFullscreenImage(msg)}
                                                         />
                                                     </div>
-                                                ) : (
-                                                    <div className="message-content-container">
+                                                </div>
+                                            ) : msg.messageType === 'file' ? (
+                                                <div className="message-content-container">
+                                                    <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" className="message-file">
+                                                        <FiPaperclip /> {msg.fileName || msg.content}
+                                                    </a>
+                                                </div>
+                                            ) : msg.messageType === 'audio' ? (
+                                                <div className="message-content-container">
+                                                    <AudioPlayer
+                                                        src={msg.fileUrl}
+                                                        durationLabel={msg.content}
+                                                        isSentByMe={isSentByMe}
+                                                    />
+                                                </div>
+                                            ) : (
+                                                <div className="message-content-container">
+                                                    {msg.messageType === 'video_call' ? (
+                                                        <div className="video-call-info">
+                                                            <FiVideo className="call-icon" />
+                                                            <p className="message-content">{msg.content}</p>
+                                                        </div>
+                                                    ) : (
                                                         <p className="message-content">
                                                             {msg.content}
                                                         </p>
-                                                    </div>
-                                                )}
-
-                                                <div className="message-info">
-                                                    <span className="message-date">{new Date(msg.createdAt).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' })}</span>
-                                                    <span className="message-time">{new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                                    )}
                                                 </div>
+                                            )}
+
+                                            <div className="message-info">
+                                                <span className="message-date">{new Date(msg.createdAt).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' })}</span>
+                                                <span className="message-time">{new Date(msg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                                             </div>
-                                            {msg.isEdited && <div className="edited-label">(Edited)</div>}
                                         </div>
-                                    );
-                                });
-                            })()}
+                                        {msg.isEdited && <div className="edited-label">(Edited)</div>}
+                                    </div>
+                                );
+                            })}
                             <div ref={messagesEndRef} />
                         </div>
 
@@ -1393,6 +2204,24 @@ const Dashboard = () => {
                                 handleSendMessage(e);
                             }
                         }} disabled={isBlocked}>
+                            {replyingToMessage && !editingMessage && (
+                                <div className="replying-to-preview">
+                                    <div className="reply-preview-content">
+                                        <div className="reply-preview-header">
+                                            <FiCornerUpLeft />
+                                            <span>Replying to {replyingToMessage.sender?.uid === currentUser.uid ? 'yourself' : (replyingToMessage.sender?.displayName || replyingToMessage.sender?.email || 'Someone')}</span>
+                                        </div>
+                                        <div className="reply-preview-text">
+                                            {replyingToMessage.messageType === 'image' ? '📸 Photo' :
+                                                replyingToMessage.messageType === 'audio' ? '🎵 Voice message' :
+                                                    replyingToMessage.content || 'Attachment'}
+                                        </div>
+                                    </div>
+                                    <button type="button" className="reply-preview-close" onClick={() => setReplyingToMessage(null)}>
+                                        <FiX />
+                                    </button>
+                                </div>
+                            )}
                             {editingMessage ? (
                                 <div className="unified-input-area edit-mode">
                                     <button type="button" className="emoji-btn-unified cancel-edit-btn" onClick={cancelEditing} title="Cancel Edit">
@@ -1422,9 +2251,6 @@ const Dashboard = () => {
                                 </div>
                             ) : (
                                 <>
-                                    {/* Image Preview */}
-                                    {/* Image Preview removed from here and moved to a modal overlay below */}
-
                                     {selectedImages.length === 0 && (
                                         <div className="unified-input-area">
                                             {isRecording ? (
@@ -1509,9 +2335,33 @@ const Dashboard = () => {
                         )}
                     </>
                 ) : (
-                    <div className="no-chat-selected">
-                        <FiMessageCircle className="no-chat-icon" />
-                        <h3>Select a chat to start messaging</h3>
+                    <div className="no-chat-selected-container">
+                        <div className="no-chat-selected-content">
+                            <div className="no-chat-3d-wrapper">
+                                <div className="no-chat-3d-badge">
+                                    <div className="badge-layer front">
+                                        <FiMessageCircle />
+                                    </div>
+                                    <div className="badge-layer middle"></div>
+                                    <div className="badge-layer back"></div>
+                                </div>
+                                <div className="no-chat-pulse-rings">
+                                    <div className="pulse-ring ring-1"></div>
+                                    <div className="pulse-ring ring-2"></div>
+                                </div>
+                            </div>
+
+                            <div className="no-chat-text-content">
+                                <h1>Welcome to KnokTalk</h1>
+                                <p>Select a friend from the sidebar or search to start a conversation.</p>
+                            </div>
+                        </div>
+
+                        <div className="no-chat-background-decoration">
+                            <div className="blob blob-1"></div>
+                            <div className="blob blob-2"></div>
+                            <div className="blob blob-3"></div>
+                        </div>
                     </div>
                 )}
             </div>
@@ -1659,6 +2509,148 @@ const Dashboard = () => {
                                 <FiSend />
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Incoming Call Notification ─────────────────────────────────── */}
+            {callState === 'incoming' && incomingCallData && (
+                <div className="incoming-call-overlay" role="dialog" aria-label="Incoming call notification">
+                    <div className="incoming-call-card">
+                        <div className="incoming-call-pulse" />
+                        <div className="incoming-call-avatar-wrap">
+                            {incomingCallData.callerPhoto ? (
+                                <img
+                                    src={incomingCallData.callerPhoto}
+                                    alt={incomingCallData.callerName}
+                                    className="incoming-call-avatar"
+                                    onError={(e) => { e.target.style.display = 'none'; e.target.nextSibling.style.display = 'flex'; }}
+                                />
+                            ) : null}
+                            <div
+                                className="incoming-call-avatar incoming-call-avatar-placeholder"
+                                style={{ display: incomingCallData.callerPhoto ? 'none' : 'flex' }}
+                            />
+                        </div>
+                        <div className="incoming-call-info">
+                            <span className="incoming-call-label">Incoming Video Call</span>
+                            <span className="incoming-call-name">{incomingCallData.callerName}</span>
+                        </div>
+                        <div className="incoming-call-actions">
+                            <button
+                                id="accept-call-btn"
+                                className="call-action-btn accept-call-btn"
+                                onClick={handleAcceptCall}
+                                title="Accept call"
+                            >
+                                <FiPhone />
+                            </button>
+                            <button
+                                id="decline-call-btn"
+                                className="call-action-btn decline-call-btn"
+                                onClick={handleDeclineCall}
+                                title="Decline call"
+                            >
+                                <FiPhoneOff />
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* ─── Active Call Overlay ─────────────────────────────────────────── */}
+            {(callState === 'calling' || callState === 'active') && (
+                <div className="active-call-overlay" role="dialog" aria-label="Active call">
+
+                    {/* ── Remote video — always in DOM so ref is valid for srcObject ── */}
+                    {/* BUG FIX: removed display:none. The video is always rendered so
+                        remoteVideoRef.current is never null when ontrack fires.
+                        The waiting screen floats on top (z-index) when callState==='calling'. */}
+                    <video
+                        ref={remoteVideoRef}
+                        className="remote-video"
+                        autoPlay
+                        playsInline
+                    />
+
+                    {/* Waiting/Calling state — sits on top of the (black) remote video */}
+                    {(callState === 'calling' || !remoteStream) && (
+                        <div className="call-waiting-screen">
+                            <div className="call-waiting-avatar-wrap">
+                                {activeCallUser?.photo ? (
+                                    <img src={activeCallUser.photo} alt={activeCallUser.name} className="call-waiting-avatar" />
+                                ) : (
+                                    <div className="call-waiting-avatar call-waiting-avatar-placeholder" />
+                                )}
+                                <div className="call-ringing-ring ring1" />
+                                <div className="call-ringing-ring ring2" />
+                                <div className="call-ringing-ring ring3" />
+                            </div>
+                            <p className="call-waiting-name">{activeCallUser?.name}</p>
+                            <p className="call-waiting-status">
+                                {callState === 'calling' ? 'Calling…' : 'Connecting…'}
+                            </p>
+                        </div>
+                    )}
+
+                    {/* Active call name + duration */}
+                    {callState === 'active' && remoteStream && (
+                        <div className="call-info-bar">
+                            <span className="call-info-name">{activeCallUser?.name}</span>
+                            <span className="call-info-duration">{formatCallDuration(callDuration)}</span>
+                        </div>
+                    )}
+
+                    {/* Local (self) PiP video — always rendered so localVideoRef is valid */}
+                    <div className="local-video-pip-wrapper">
+                        <video
+                            ref={localVideoRef}
+                            className="local-video-pip"
+                            autoPlay
+                            playsInline
+                            muted
+                        />
+                        {!isVideoEnabled && (
+                            <div className="local-video-off-overlay">
+                                <FiVideoOff />
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Controls */}
+                    <div className="call-controls">
+                        {/* Mute toggle */}
+                        <button
+                            id="toggle-mic-btn"
+                            className={`call-control-btn ${isMicMuted ? 'toggled-off' : ''}`}
+                            onClick={toggleMic}
+                            title={isMicMuted ? 'Unmute' : 'Mute'}
+                        >
+                            {isMicMuted ? <FiMicOff /> : <FiMic />}
+                            <span className="call-btn-label">{isMicMuted ? 'Unmute' : 'Mute'}</span>
+                        </button>
+
+                        {/* End call */}
+                        <button
+                            id="end-call-btn"
+                            className="call-control-btn end-call-btn"
+                            onClick={handleEndCall}
+                            title="End call"
+                        >
+                            <FiPhoneOff />
+                            <span className="call-btn-label">End Call</span>
+                        </button>
+
+                        {/* Video toggle */}
+                        <button
+                            id="toggle-video-btn"
+                            className={`call-control-btn ${!isVideoEnabled ? 'toggled-off' : ''}`}
+                            onClick={toggleVideo}
+                            title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
+                        >
+                            {isVideoEnabled ? <FiVideo /> : <FiVideoOff />}
+                            <span className="call-btn-label">{isVideoEnabled ? 'Camera' : 'No Camera'}</span>
+                        </button>
                     </div>
                 </div>
             )}

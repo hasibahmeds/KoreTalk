@@ -107,7 +107,7 @@ const Register = () => {
             if (imagePreview) {
                 updateData.photoURL = imagePreview;
             }
-            await fetch(`https://koretalk007.onrender.com/api/users/update/${uid}`, {
+            await fetch(`http://localhost:5000/api/users/update/${uid}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(updateData)
