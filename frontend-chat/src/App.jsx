@@ -1,4 +1,5 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 import Login from './pages/Login';
@@ -33,12 +34,28 @@ const PublicRoute = ({ children }) => {
   return children;
 };
 
+// Component to handle redirection on refresh
+const RefreshHandler = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    // On mount (which happens on every page reload/refresh), redirect to root
+    if (location.pathname !== '/') {
+      navigate('/', { replace: true });
+    }
+  }, []);
+
+  return null;
+};
+
 function App() {
   return (
     <Router>
       <AuthProvider>
         <SocketProvider>
           <div className="app">
+            <RefreshHandler />
             <Routes>
               <Route
                 path="/login"

@@ -61,7 +61,7 @@ const server = http.createServer(app);
 // Socket.io setup
 const io = new Server(server, {
     cors: {
-        origin: "https://getknoktalk.onrender.com",
+        origin: "http://localhost:5173",
         methods: ["GET", "POST"]
     }
 });
